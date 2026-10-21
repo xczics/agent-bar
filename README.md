@@ -48,7 +48,7 @@
 **从 Release 手动安装**：
 
 ```sh
-V=0.0.1
+V=0.0.2
 curl -fsSLO https://github.com/xczics/agent-bar/releases/download/v$V/agent-bar-$V-macos-universal.tar.gz
 tar xzf agent-bar-$V-macos-universal.tar.gz
 agent-bar-$V-macos-universal/install.sh
@@ -77,9 +77,9 @@ scripts/install.sh
 | 颜色（默认） | 状态 | 含义 |
 | --- | --- | --- |
 | 🟢 绿（发光） | 运行中 | 正在思考或调用工具 |
-| 🟡 黄 | 已回复 | 这一轮已经答完，等你回话 |
+| 🟡 黄 | 已回复 | 这一轮已经答完，你还没看（点一下灯就算看过，之后变暗绿） |
 | 🔴 红 | 等你确认 | Claude 在等你批准权限或回答问题 |
-| 暗绿（熄灭） | 空闲 | 刚开的会话，还没发消息 |
+| 暗绿（熄灭） | 空闲 | 刚开的会话；或者回复你已经看过，轮到你了 |
 | ⚪ 灰 | 无响应? | 运行中但已经超过 10 分钟没有任何动静 |
 
 颜色都可以在右键菜单 →“设置…”里自己改。
@@ -111,9 +111,37 @@ Claude Code ──hook(stdin JSON)──▶ agent-status-hook ──写──▶
 
 卸载会从 settings.json 移除 hooks（同样先备份）、退出浮窗，并删除开机自启项和二进制文件。
 
+## 开发指南
+
+完整内容见 [docs/development.md](docs/development.md)，这里是摘要。
+
+**构建与测试**
+
+```sh
+cmake -S . -B build && cmake --build build -j
+ctest --test-dir build --output-on-failure   # core 单元测试
+scripts/acceptance.sh                        # hook 验收
+build/bin/agent-bar --snapshot /tmp/a.png    # 离屏渲染界面，不需要屏幕录制权限
+```
+
+**代码结构**：`core/` 放平台无关的逻辑（状态机、adapter、存储、设置合并），并有单元测试；`hook/` 是 `agent-status-hook`；`platform/mac/` 是浮窗。两者之间唯一的接口是 `~/.claude/agent-status/<session>.json`。
+
+**为你喜欢的 agent 添加支持**：agent-bar 用 adapter 把不同 agent 的事件转换成内部统一的 7 种事件（会话开始、发消息、调用工具前/后、需要确认、回答完毕、会话结束），状态机、存储和界面都可以直接复用。步骤如下：
+
+1. 先用 `agent-status-hook emit --agent <名字> --session-id <id> --event Stop ...` 手动模拟，看浮窗上的效果；
+2. 在 `core/src/adapter.cpp` 写一个解析函数，把对方 hook 的原始输入转成 `HookEvent`；
+3. 把它注册进 `adapters()` 表；
+4. 在 `tests/test_core.cpp` 里用对方真实的 payload 写测试；
+5. 在对方 agent 的配置里让它调用 `agent-status-hook --agent <名字>`；可选：给 `install.sh` 加自动配置；
+6. 更新教程里的支持表和 `changelog/unreleased.md`，然后提 PR。
+
+每一步的细节和示例代码见 [开发指南 · 为你喜欢的 agent 添加支持](docs/development.md#为你喜欢的-agent-添加支持)。
+
+**项目文档**：正在做和规划中的工作记在 [Handoff.md](Handoff.md)；已完成的内容记在 [changelog/](changelog/)；用法以 [教程](docs/tutorial.md) 为准。
+
 ## 开发
 
-见 [教程 · 从源码构建与测试](docs/tutorial.md#从源码构建与测试)。正在做和规划中的工作记在 [Handoff.md](Handoff.md)，已完成的内容记在 [changelog/](changelog/)。
+想为你喜欢的 agent 添加支持，或者参与开发，请看 [开发指南](docs/development.md)（未发布：内容对应 main 分支）。
 
 ## License
 

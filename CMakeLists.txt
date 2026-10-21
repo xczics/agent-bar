@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(agent-bar VERSION 0.0.1 LANGUAGES CXX)
+project(agent-bar VERSION 0.0.2 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -31,6 +31,7 @@ endif()
 # ---- core: platform-independent logic + POSIX/Win32 file store ----
 add_library(agentbar_core STATIC
   core/src/status.cpp
+  core/src/adapter.cpp
   core/src/config.cpp
   core/src/settings.cpp
   core/src/store.cpp)

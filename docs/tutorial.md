@@ -1,6 +1,6 @@
 # agent-bar 使用教程
 
-> 本教程与当前代码保持同步：已发布版本为 **0.0.1**（macOS），标注“未发布”的功能只在 main 分支上有。
+> 本教程与当前代码保持同步，对应版本：**0.0.2**（macOS）。
 
 ## 目录
 
@@ -29,7 +29,7 @@ README 里有一段[接入 prompt](../README.md#安装)，复制后发给 Claude
 ### 从 Release 安装
 
 ```sh
-V=0.0.1
+V=0.0.2
 curl -fsSLO https://github.com/xczics/agent-bar/releases/download/v$V/agent-bar-$V-macos-universal.tar.gz
 tar xzf agent-bar-$V-macos-universal.tar.gz
 agent-bar-$V-macos-universal/install.sh            # 可加 --autostart / --no-start / --hook-only
@@ -74,7 +74,7 @@ agent-bar 通过 Claude Code 的 hooks 拿到状态，所以只要是**在这台
 | Claude Agent SDK 写的程序 | ⚠️ 只有加载了用户级设置（`settingSources` 包含 `user`）时才有 hooks |
 | 子 agent（Task 工具） | 不单独显示，只体现为主会话“运行中” |
 | 云端会话（claude.ai/code、GitHub Actions 等） | ❌ 不在本机运行，看不到 |
-| 其他 agent（Codex CLI、Gemini CLI、Aider 等） | ❌ 暂不支持（见 [Handoff.md](../Handoff.md) 的规划） |
+| 其他 agent（Codex CLI、Gemini CLI、Aider 等） | ❌ 暂无现成的适配。框架已经有了：写一个 adapter 就能接入，见[开发指南](development.md#为你喜欢的-agent-添加支持) |
 
 注意：点击灯会打开 VS Code（`code <cwd>`），即使这个会话其实跑在终端里。
 
@@ -160,7 +160,7 @@ README 里有一段现成的[挂载 prompt](../README.md#安装)，可以直接�
 说明：
 
 - 浮窗始终置顶，可以显示在全屏应用之上，不会出现在 Dock 和 Cmd+Tab 里，点击它也不会抢走当前窗口的焦点。
-- **桌面（Space）**（未发布）：默认情况下，浮窗属于某一个桌面，在调度中心（四指上划）里可以拖动它、把它拖到别的桌面。在右键菜单或设置里打开“在所有桌面显示”后，它会出现在每个桌面上，但在调度中心里固定不动、不能拖。
+- **桌面（Space）**：默认情况下，浮窗属于某一个桌面，在调度中心（四指上划）里可以拖动它、把它拖到别的桌面。在右键菜单或设置里打开“在所有桌面显示”后，它会出现在每个桌面上，但在调度中心里固定不动、不能拖。
 - 浮窗改变大小时，上边缘位置保持不变；左右方向会从离屏幕边缘更近的那一侧往里收或往外长，并且不会超出屏幕。
 - 位置在拖动后保存，下次启动时恢复。
 - 找 VS Code 的顺序：先找 `PATH` 里的 `code`，再找 `/usr/local/bin/code`、`/opt/homebrew/bin/code` 和 VS Code.app 自带的 CLI。都找不到时，改用 `open -b com.microsoft.VSCode <cwd>`。
@@ -172,7 +172,7 @@ README 里有一段现成的[挂载 prompt](../README.md#安装)，可以直接�
 <img src="images/settings.png" width="340" alt="设置窗口">
 
 - **颜色**：每种状态一个取色块，点击后用系统取色器选色；“恢复默认颜色”会还原成上面表格里的默认配色。
-- **显示**：紧凑模式、灯上显示简称、灯下显示状态（后两项只在紧凑模式下有效）、在所有桌面显示（未发布）。
+- **显示**：紧凑模式、灯上显示简称、灯下显示状态（后两项只在紧凑模式下有效）、在所有桌面显示。
 - **其他**：无响应阈值（分钟）、开机自启。
 
 ## 配置文件 bar.ini
@@ -188,7 +188,7 @@ expire_hours=12   # 超过多少小时没有更新的记录会被自动删除（
 compact=1         # 1 = 紧凑模式，0 = 始终显示列表
 show_names=1      # 紧凑模式：灯上方显示项目简称
 show_status=1     # 紧凑模式：灯下方显示状态简写
-all_spaces=0      # 1 = 在所有桌面显示（调度中心里不能拖）；0 = 属于一个桌面（未发布）
+all_spaces=0      # 1 = 在所有桌面显示（调度中心里不能拖）；0 = 属于一个桌面
 color_waiting=#e5484d   # 各状态颜色（#rrggbb）
 color_replied=#ffc53d
 color_busy=#30a46c
@@ -209,6 +209,10 @@ agent-bar --autostart on|off      开关开机自启
 agent-bar --version
 
 agent-status-hook                 （由 Claude Code 调用，从 stdin 读取 JSON）
+agent-status-hook --agent <name>  （由其他 agent 调用，用对应的 adapter 解析 stdin）
+agent-status-hook emit --session-id <id> --event <Event> [--cwd <dir>] [--agent <name>]
+                  [--tool <name>] [--prompt <text>] [--message <text>]
+                                  不拼 JSON 直接上报一个事件（调试或写适配脚本时用）
 agent-status-hook install-hooks   --settings <settings.json> --command <hook 路径>
 agent-status-hook uninstall-hooks --settings <settings.json>
 agent-status-hook --version
@@ -276,7 +280,7 @@ hook/            agent-status-hook
 platform/mac/    agent-bar 的 Cocoa 实现（NSPanel + FSEvents）
 tests/           单元测试（无第三方框架）
 scripts/         安装、卸载、验收、打包
-docs/            设计文档、本教程、截图
+docs/            设计文档、本教程、开发指南（development.md）、截图
 changelog/       已完成的内容（每个版本一个文件，也是 Release 说明；unreleased.md 记录尚未发布的内容）
 Handoff.md       正在做和规划中的工作
 ```

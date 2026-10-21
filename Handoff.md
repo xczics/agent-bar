@@ -2,7 +2,7 @@
 
 这里只记**正在做**和**规划中**的工作。已完成的内容移到 [changelog/](changelog/)，用法写进 [docs/tutorial.md](docs/tutorial.md)。人类留言放在 [Inbox.md](Inbox.md)。
 
-当前版本：0.0.1（macOS）。上次更新：2026-10-21。
+当前版本：0.0.2（macOS）。上次更新：2026-10-21。
 
 ## 正在做
 
@@ -20,7 +20,7 @@
 - [ ] **签名与公证**：目前只有 ad-hoc 签名。用浏览器下载后需要运行 install.sh 才能去掉隔离属性。
 
 - [ ] **点击跳转按运行形式区分**：现在点击总是执行 `code <cwd>`。会话登记里有 `entrypoint`（例如 `claude-vscode`、`cli`），可以据此对终端会话改为激活对应的终端或 tmux 窗口。
-- [ ] **支持其他 agent**：状态文件协议是通用的。给 Codex CLI、Gemini CLI 等提供适配（各自的 hook 或 notify 机制 → 调用 `agent-status-hook`，或写一个小的适配脚本），并在 `project` 旁边显示 agent 类型。
+- [ ] **支持其他 agent**：adapter 框架已在 v0.0.2 完成（见 docs/development.md），还没有写任何具体的第三方 adapter。下一步：确认 Codex CLI、Gemini CLI 等的 hook 或 notify 格式，写对应的 adapter，并给 install.sh 加可选的配置步骤。
 - [ ] 实测 Cursor、JetBrains、Claude 桌面 App 里的会话。
 
 ### 之后

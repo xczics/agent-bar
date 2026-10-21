@@ -16,6 +16,7 @@
 #include <ctime>
 #include <string>
 
+#include "agentbar/adapter.hpp"
 #include "agentbar/settings.hpp"
 #include "agentbar/status.hpp"
 #include "agentbar/store.hpp"
@@ -57,17 +58,22 @@ std::string read_stdin() {
   return out;
 }
 
-void run_hook() {
+void run_hook(std::string_view agent) {
   const std::string dir = store::status_dir();
+  const Adapter* adapter = find_adapter(agent);
+  if (!adapter) {
+    debug_log(dir, "unknown agent '" + std::string(agent) + "'");
+    return;
+  }
   if (isatty(STDIN_FILENO)) return;  // run by hand without input
   const std::string input = read_stdin();
-  auto ev = parse_hook_input(input);
+  auto ev = parse_with(*adapter, input);
   if (!ev) {
-    debug_log(dir, "invalid input (" + std::to_string(input.size()) + " bytes)");
+    debug_log(dir, std::string(adapter->name) + ": invalid input (" + std::to_string(input.size()) + " bytes)");
     return;
   }
   auto r = store::handle_event(dir, *ev, store::now_seconds());
-  debug_log(dir, ev->event + " " + (is_valid_session_id(ev->session_id) ? ev->session_id : "<bad-id>") +
+  debug_log(dir, ev->agent + " " + ev->event + " " + (is_valid_session_id(ev->session_id) ? ev->session_id : "<bad-id>") +
                      " " + result_name(r));
 }
 
@@ -76,8 +82,15 @@ void run_hook() {
 int usage() {
   std::fprintf(stderr,
                "agent-status-hook %s\n"
-               "Claude Code hook: reads a hook JSON payload on stdin. Admin commands:\n"
+               "Hook mode (no arguments, or --agent <name>): reads the agent's hook payload on stdin.\n"
+               "  agent-status-hook                   Claude Code\n"
+               "  agent-status-hook --agent <name>    another agent (see docs/development.md)\n"
+               "Admin commands:\n"
                "  agent-status-hook --version\n"
+               "  agent-status-hook emit --session-id <id> --event <Event> [--cwd <dir>] [--agent <name>]\n"
+               "                    [--tool <name>] [--prompt <text>] [--message <text>]\n"
+               "      report one event without building JSON (for adapters of other agents);\n"
+               "      Event: SessionStart UserPromptSubmit PreToolUse PostToolUse Notification Stop SessionEnd\n"
                "  agent-status-hook install-hooks   --settings <settings.json> --command <hook path>\n"
                "  agent-status-hook uninstall-hooks --settings <settings.json>\n",
                AGENTBAR_VERSION);
@@ -120,11 +133,44 @@ int edit_settings(int argc, char** argv, bool install) {
   return 0;
 }
 
+// `emit`: the same state machine as hook mode, fed from flags instead of stdin.
+int emit(int argc, char** argv) {
+  HookEvent ev;
+  for (int i = 2; i + 1 < argc; i += 2) {
+    const char* k = argv[i];
+    const char* v = argv[i + 1];
+    if (std::strcmp(k, "--session-id") == 0) ev.session_id = v;
+    else if (std::strcmp(k, "--event") == 0) ev.event = v;
+    else if (std::strcmp(k, "--cwd") == 0) ev.cwd = v;
+    else if (std::strcmp(k, "--tool") == 0) ev.tool_name = v;
+    else if (std::strcmp(k, "--prompt") == 0) ev.prompt = v;
+    else if (std::strcmp(k, "--message") == 0) ev.message = v;
+    else if (std::strcmp(k, "--agent") == 0) ev.agent = v;
+    else return usage();
+  }
+  if ((argc - 2) % 2 != 0 || ev.session_id.empty() || ev.event.empty()) return usage();
+  if (!is_valid_session_id(ev.session_id)) {
+    std::fprintf(stderr, "error: --session-id may only contain letters, digits, '-' and '_'\n");
+    return 1;
+  }
+  const auto r = store::handle_event(store::status_dir(), ev, store::now_seconds());
+  if (r == store::EventResult::Ignored) {
+    std::fprintf(stderr, "error: unknown event %s\n", ev.event.c_str());
+    return 1;
+  }
+  if (r == store::EventResult::LockTimeout || r == store::EventResult::WriteFailed) {
+    std::fprintf(stderr, "error: %s\n", result_name(r));
+    return 1;
+  }
+  return 0;
+}
+
 int run_cli(int argc, char** argv) {
   if (std::strcmp(argv[1], "--version") == 0) {
     std::printf("agent-status-hook %s\n", AGENTBAR_VERSION);
     return 0;
   }
+  if (std::strcmp(argv[1], "emit") == 0) return emit(argc, argv);
   if (std::strcmp(argv[1], "install-hooks") == 0) return edit_settings(argc, argv, true);
   if (std::strcmp(argv[1], "uninstall-hooks") == 0) return edit_settings(argc, argv, false);
   return usage();
@@ -133,6 +179,15 @@ int run_cli(int argc, char** argv) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  // Hook mode for a non-default adapter: `agent-status-hook --agent <name>`.
+  // Same hard rules as the default hook mode: exit 0, no stdout.
+  if (argc == 3 && std::strcmp(argv[1], "--agent") == 0) {
+    try {
+      run_hook(argv[2]);
+    } catch (...) {
+    }
+    return 0;
+  }
   if (argc > 1) {
     try {
       return run_cli(argc, argv);
@@ -142,7 +197,7 @@ int main(int argc, char** argv) {
     }
   }
   try {
-    run_hook();
+    run_hook(kDefaultAdapter);
   } catch (...) {
   }
   return 0;

@@ -20,6 +20,7 @@
 
 #include <sys/wait.h>
 
+#include "agentbar/adapter.hpp"
 #include "agentbar/config.hpp"
 #include "agentbar/settings.hpp"
 #include "agentbar/status.hpp"
@@ -65,6 +66,13 @@ static NSColor* TextColor(NSColor* c) {
   if (!rgb) return c;
   const CGFloat lum = 0.2126 * rgb.redComponent + 0.7152 * rgb.greenComponent + 0.0722 * rgb.blueComponent;
   return lum < 0.45 ? [rgb blendedColorWithFraction:(0.45 - lum) / 0.45 * 0.6 ofColor:NSColor.whiteColor] : rgb;
+}
+
+// "Codex · " style prefix for sessions of agents other than Claude Code.
+static std::string AgentPrefix(const Session& s) {
+  if (s.agent.empty() || s.agent == kDefaultAdapter) return "";
+  const Adapter* a = find_adapter(s.agent);
+  return std::string(a ? a->display_name : s.agent.c_str()) + " · ";
 }
 
 static NSString* NS(const std::string& s) {
@@ -366,7 +374,7 @@ static const NSInteger kExpandButton = -3;
   if (i < 0 || i >= (NSInteger)sessions.size()) return @"";
   const Session& s = sessions[i];
   const double now = store::now_seconds();
-  std::string text = s.project + "  " + status_text(s, now, self.controller.config.stale_after_seconds());
+  std::string text = AgentPrefix(s) + s.project + "  " + status_text(s, now, self.controller.config.stale_after_seconds());
   if (!s.detail.empty()) text += "\n" + display_detail(s.detail);
   return NS(text);
 }
@@ -607,7 +615,7 @@ static void DrawLight(NSRect r, NSColor* color, BOOL glow, BOOL hollow) {
     right -= statusW + 8;
 
     const CGFloat textX = kInset + 16;
-    DrawText(NS(s.project), NSMakeRect(textX, line, right - textX, 17), s.unread ? nameBold : nameFont, white,
+    DrawText(NS(AgentPrefix(s) + s.project), NSMakeRect(textX, line, right - textX, 17), s.unread ? nameBold : nameFont, white,
              NSTextAlignmentLeft);
     if (!s.detail.empty()) {
       DrawText(NS(display_detail(s.detail)), NSMakeRect(textX, y + 22, kWidth - kInset - textX, 15), small,
@@ -1217,7 +1225,7 @@ static int PrintList(const std::string& dir) {
   sort_sessions(sessions, now, cfg.stale_after_seconds());
   std::printf("%s\n", title_text(sessions, now, cfg.stale_after_seconds()).c_str());
   for (const auto& s : sessions) {
-    std::printf("%s %-24s %s  %s\n", s.unread ? "*" : " ", s.project.c_str(),
+    std::printf("%s %-24s %s  %s\n", s.unread ? "*" : " ", (AgentPrefix(s) + s.project).c_str(),
                 status_text(s, now, cfg.stale_after_seconds()).c_str(), display_detail(s.detail).c_str());
   }
   return 0;

@@ -81,7 +81,18 @@ d = json.load(open(sys.argv[1]))
 assert d["state"] == "busy" and d["detail"] == "Edit" and d["project"] == "项目" and d["py_only"] == {"x": 1}
 EOF
 
-echo "5. speed"
+echo "5. emit (adapter CLI for other agents)"
+"$HOOK" emit --session-id emit1 --event UserPromptSubmit --cwd /tmp/other-agent --prompt "hello there" &&
+  "$HOOK" emit --session-id emit1 --event Stop
+FILE="$AGENT_STATUS_DIR/emit1.json"
+expect "emit Stop" replied true ""
+[[ "$(field project)" == "other-agent" ]] && pass "emit keeps cwd/project" || fail "emit project"
+"$HOOK" emit --session-id ../x --event Stop 2>/dev/null && fail "emit accepted a bad id" || pass "emit rejects a bad id"
+"$HOOK" emit --session-id emit1 --event Bogus 2>/dev/null && fail "emit accepted an unknown event" || pass "emit rejects an unknown event"
+"$HOOK" emit --session-id emit1 --event SessionEnd
+[[ ! -e "$FILE" ]] && pass "emit SessionEnd deletes" || fail "emit SessionEnd"
+
+echo "6. speed"
 payload="$AGENT_STATUS_DIR/payload.json"
 printf '{"session_id":"perf","cwd":"/tmp/p","hook_event_name":"PreToolUse","tool_name":"Bash"}' > "$payload"
 if command -v hyperfine >/dev/null; then

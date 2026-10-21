@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "agentbar/adapter.hpp"
 #include "agentbar/config.hpp"
 #include "agentbar/settings.hpp"
 #include "agentbar/status.hpp"
@@ -95,6 +96,27 @@ TEST(parse_hook_input_invalid) {
   CHECK(!parse_hook_input(R"({"hook_event_name":"Stop"})"));
   CHECK(!parse_hook_input(R"({"session_id":"a"})"));
   CHECK(!parse_hook_input(R"({"session_id":5,"hook_event_name":"Stop"})"));
+}
+
+TEST(adapters_registry) {
+  const Adapter* claude = find_adapter("claude");
+  CHECK(claude != nullptr);
+  CHECK_EQ(std::string(adapters().front().name), std::string(kDefaultAdapter));
+  CHECK(find_adapter("nope") == nullptr);
+  for (const auto& a : adapters()) {
+    CHECK(is_valid_session_id(a.name));  // usable as a CLI value and file field
+    CHECK(!a.parse("not json"));          // every adapter must reject garbage quietly
+  }
+  auto e = parse_with(*claude, R"({"session_id":"s","hook_event_name":"Stop","cwd":"/a/b"})");
+  CHECK(e.has_value());
+  CHECK_EQ(e->agent, std::string("claude"));
+  auto t = apply_event(nullptr, *e, 1);
+  CHECK_EQ(t.doc["agent"].get<std::string>(), std::string("claude"));
+  CHECK_EQ(session_from_json(t.doc, "s")->agent, std::string("claude"));
+  HookEvent bare;  // no agent: field is not written (keeps old files byte-compatible)
+  bare.session_id = "s";
+  bare.event = "Stop";
+  CHECK(!apply_event(nullptr, bare, 1).doc.contains("agent"));
 }
 
 TEST(session_id_validation) {
@@ -251,7 +273,12 @@ TEST(display_states) {
   s.state = "waiting";
   CHECK(display_state(s, 1000, 600) == DisplayState::Waiting);
   s.state = "replied";
+  s.unread = true;
   CHECK(display_state(s, 1000, 600) == DisplayState::Replied);
+  s.unread = false;  // read reply: your turn, shown like idle
+  CHECK(display_state(s, 1000, 600) == DisplayState::Idle);
+  s.state = "waiting";  // read permission request: still blocked, stays red
+  CHECK(display_state(s, 1000, 600) == DisplayState::Waiting);
   s.state = "busy";
   CHECK(display_state(s, 1500, 600) == DisplayState::Busy);
   CHECK(display_state(s, 1601, 600) == DisplayState::Stale);
@@ -290,8 +317,8 @@ TEST(sorting) {
   std::vector<std::string> ids;
   for (auto& s : v) ids.push_back(s.id);
   std::vector<std::string> want = {"waiting_unread", "replied_unread", "waiting_read",
-                                   "replied_read",   "busy_new",       "busy_old",
-                                   "stale",          "idle"};
+                                   "busy_new",       "busy_old",       "stale",
+                                   "replied_read",   "idle"};  // read reply sorts as idle
   CHECK(ids == want);
 }
 

@@ -138,6 +138,7 @@ Transition apply_event(const json* old, const HookEvent& ev, double now) {
   // Assignment order defines key order for new files; existing keys keep their place.
   doc["v"] = kProtocolVersion;
   doc["session_id"] = ev.session_id;
+  if (!ev.agent.empty()) doc["agent"] = ev.agent;
   if (!ev.cwd.empty()) {
     doc["project"] = project_name(ev.cwd);
     doc["cwd"] = ev.cwd;
@@ -176,6 +177,7 @@ std::optional<RegisteredSession> parse_registry_entry(std::string_view raw) {
 
 json discovered_session_doc(const RegisteredSession& r, double now) {
   HookEvent ev;
+  ev.agent = "claude";  // the registry is Claude Code's
   ev.session_id = r.session_id;
   ev.cwd = r.cwd;
   ev.event = r.status == "busy" ? "PostToolUse" : "SessionStart";  // busy with empty detail, or idle
@@ -187,6 +189,7 @@ std::optional<Session> session_from_json(const json& j, std::string_view id) {
   Session s;
   s.id = std::string(id);
   s.cwd = get_string(j, "cwd");
+  s.agent = get_string(j, "agent");
   s.project = get_string(j, "project");
   if (s.project.empty()) s.project = s.cwd.empty() ? s.id : project_name(s.cwd);
   s.state = get_string(j, "state");
@@ -199,7 +202,9 @@ std::optional<Session> session_from_json(const json& j, std::string_view id) {
 
 DisplayState display_state(const Session& s, double now, double stale_after) {
   if (s.state == "waiting") return DisplayState::Waiting;
-  if (s.state == "replied") return DisplayState::Replied;
+  // A reply you have already read is your turn now, not something to flag:
+  // show it like idle. (A read "waiting" stays red: the agent is still blocked.)
+  if (s.state == "replied") return s.unread ? DisplayState::Replied : DisplayState::Idle;
   if (s.state == "busy") {
     return (now - s.updated > stale_after) ? DisplayState::Stale : DisplayState::Busy;
   }

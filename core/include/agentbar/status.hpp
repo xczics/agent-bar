@@ -21,8 +21,11 @@ inline constexpr std::size_t kPromptDetailChars = 60;
 inline constexpr std::size_t kMessageDetailChars = 200;
 inline constexpr std::size_t kDisplayDetailChars = 48;
 
-// Fields of the Claude Code hook stdin payload that we use.
+// A normalized hook event. `event` is one of SessionStart, UserPromptSubmit,
+// PreToolUse, PostToolUse, Notification, Stop, SessionEnd (Claude Code's names
+// are the internal vocabulary; adapters map other agents onto them).
 struct HookEvent {
+  std::string agent;  // adapter name, e.g. "claude"; empty = not recorded
   std::string session_id;
   std::string event;  // hook_event_name
   std::string cwd;
@@ -31,8 +34,9 @@ struct HookEvent {
   std::string message;
 };
 
-// Parses the hook stdin JSON. Returns nullopt for invalid JSON, a non-object,
-// or a missing session_id / hook_event_name. Never throws.
+// Parses Claude Code's hook stdin JSON (the "claude" adapter). Returns nullopt
+// for invalid JSON, a non-object, or a missing session_id / hook_event_name.
+// Never throws.
 std::optional<HookEvent> parse_hook_input(std::string_view raw);
 
 // Only [A-Za-z0-9_-], non-empty, at most 128 bytes.
@@ -79,6 +83,7 @@ enum class DisplayState { Waiting, Replied, Busy, Stale, Idle };
 
 struct Session {
   std::string id;
+  std::string agent;  // "" for files written before the field existed
   std::string project;
   std::string cwd;
   std::string state;
@@ -92,6 +97,7 @@ struct Session {
 // Returns nullopt if the document is not an object. Missing fields get defaults.
 std::optional<Session> session_from_json(const json& j, std::string_view id);
 
+// replied + read is shown as Idle; busy without events for stale_after is Stale.
 DisplayState display_state(const Session& s, double now, double stale_after);
 int display_rank(DisplayState d);  // waiting=0 ... idle=4
 const char* display_label(DisplayState d);
