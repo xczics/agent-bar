@@ -185,6 +185,24 @@ TEST(map_user_prompt_multibyte) {
   CHECK_EQ(t.doc["detail"].get<std::string>().size(), std::size_t(60 * 3));
 }
 
+TEST(task_notification_prompts) {
+  const char* done =
+      "<task-notification>\n<task-id>bffmgz8qe</task-id>\n<tool-use-id>toolu_01</tool-use-id>\n"
+      "<output-file>/tmp/x.output</output-file>\n<status>completed</status>\n"
+      "<summary>Background command \"Run tests\" completed (exit code 0)</summary>\n</task-notification>";
+  CHECK_EQ(describe_prompt(done), std::string("后台任务完成：Run tests"));
+  CHECK_EQ(describe_prompt("<task-notification><status>failed</status></task-notification>"),
+           std::string("后台任务失败"));
+  CHECK_EQ(describe_prompt("\n<task-notification><status>killed</status><summary>no quotes</summary>"),
+           std::string("后台任务已停止"));
+  CHECK_EQ(describe_prompt("<task-notification><status>weird</status>"), std::string("后台任务通知"));
+  CHECK_EQ(describe_prompt("fix the <task-notification> parser"), std::string("fix the <task-notification> parser"));
+  CHECK_EQ(describe_prompt(""), std::string(""));
+  auto t = apply_event(nullptr, ev("UserPromptSubmit", "prompt", done), 1);
+  CHECK_EQ(t.doc["state"].get<std::string>(), std::string("busy"));
+  CHECK_EQ(t.doc["detail"].get<std::string>(), std::string("后台任务完成：Run tests"));
+}
+
 TEST(map_pre_tool_use) {
   json old = doc_with("busy", false, "prompt text");
   auto t = apply_event(&old, ev("PreToolUse", "tool_name", "Bash"), 1000);

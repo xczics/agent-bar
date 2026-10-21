@@ -46,6 +46,12 @@ bool is_valid_session_id(std::string_view id);
 // multi-byte sequence. Sets *truncated when anything was cut.
 std::string utf8_truncate(std::string_view s, std::size_t max_chars, bool* truncated = nullptr);
 
+// Detail text for a UserPromptSubmit. Claude Code delivers background-task
+// results as a synthetic prompt "<task-notification>…<status>completed</status>
+// <summary>Background command "Desc" completed …</summary>…"; those become
+// "后台任务完成：Desc" (失败 / 已停止). Other prompts are returned unchanged.
+std::string describe_prompt(std::string_view prompt);
+
 // Replaces \r, \n and \t with spaces.
 std::string flatten_whitespace(std::string_view s);
 

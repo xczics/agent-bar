@@ -70,6 +70,43 @@ std::string utf8_truncate(std::string_view s, std::size_t max_chars, bool* trunc
   return std::string(s);
 }
 
+namespace {
+
+// Text between <tag> and </tag>, or empty.
+std::string_view tag_text(std::string_view s, std::string_view tag) {
+  const std::string open = "<" + std::string(tag) + ">";
+  const std::string close = "</" + std::string(tag) + ">";
+  auto a = s.find(open);
+  if (a == std::string_view::npos) return {};
+  a += open.size();
+  auto b = s.find(close, a);
+  return b == std::string_view::npos ? std::string_view{} : s.substr(a, b - a);
+}
+
+}  // namespace
+
+std::string describe_prompt(std::string_view prompt) {
+  std::string_view p = prompt;
+  while (!p.empty() && (p.front() == ' ' || p.front() == '\n' || p.front() == '\r' || p.front() == '\t'))
+    p.remove_prefix(1);
+  if (p.substr(0, 19) != "<task-notification>") return std::string(prompt);
+
+  const std::string_view status = tag_text(p, "status");
+  std::string out = status == "completed"                     ? "后台任务完成"
+                    : status == "failed"                      ? "后台任务失败"
+                    : status == "killed" || status == "stopped" ? "后台任务已停止"
+                                                              : "后台任务通知";
+  // The summary quotes the task's description: Background command "Desc" completed …
+  const std::string_view summary = tag_text(p, "summary");
+  auto q1 = summary.find('"');
+  auto q2 = q1 == std::string_view::npos ? q1 : summary.find('"', q1 + 1);
+  if (q2 != std::string_view::npos && q2 > q1 + 1) {
+    out += "：";
+    out += summary.substr(q1 + 1, q2 - q1 - 1);
+  }
+  return out;
+}
+
 std::string flatten_whitespace(std::string_view s) {
   std::string out(s);
   for (char& c : out) {
@@ -106,7 +143,7 @@ Transition apply_event(const json* old, const HookEvent& ev, double now) {
     state = "idle";
   } else if (e == "UserPromptSubmit") {
     state = "busy";
-    detail = utf8_truncate(flatten_whitespace(ev.prompt), kPromptDetailChars);
+    detail = utf8_truncate(flatten_whitespace(describe_prompt(ev.prompt)), kPromptDetailChars);
   } else if (e == "PreToolUse") {
     state = "busy";
     detail = ev.tool_name;
