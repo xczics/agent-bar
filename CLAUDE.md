@@ -19,8 +19,9 @@ without screen-recording permission — use it to check visual changes.
 ## Documentation rules (from the user)
 
 - `Handoff.md` holds only **in-progress** and **planned** work. When something
-  is done, move it to `changelog/vX.Y.Z.md` (one file per version; it doubles
-  as the GitHub release notes).
+  is done, move it to `changelog/unreleased.md`; at release time that file is
+  renamed to `changelog/vX.Y.Z.md` (one file per version; it doubles as the
+  GitHub release notes).
 - `docs/tutorial.md` must match the current behaviour. Update it in the same
   change as any user-visible behaviour, flag or install step.
 - `Inbox.md` is the user's drop box. Read it at the start of a session and

@@ -375,6 +375,11 @@ TEST(bar_ini_roundtrip) {
   CHECK(!parse_bar_ini(format_bar_ini(off)).compact);
   BarConfig bare = parse_bar_ini("show_names=0\nshow_status=0\n");
   CHECK(!bare.show_names && !bare.show_status);
+  CHECK(!BarConfig{}.all_spaces);  // default: one desktop, draggable in Mission Control
+  CHECK(parse_bar_ini("all_spaces=1\n").all_spaces);
+  BarConfig every;
+  every.all_spaces = true;
+  CHECK(parse_bar_ini(format_bar_ini(every)).all_spaces);
   CHECK(parse_bar_ini(format_bar_ini(BarConfig{})).show_names);
 }
 

@@ -18,6 +18,7 @@ struct BarConfig {
   bool compact = true;      // lights-only view; click to expand
   bool show_names = true;   // compact: short project name above each light
   bool show_status = true;  // compact: short status below each light
+  bool all_spaces = false;  // on every desktop (fixed in Mission Control) vs. one movable desktop
   // Colours per display state (0xRRGGBB), indexed by DisplayState.
   std::uint32_t colors[5] = {
       default_color(DisplayState::Waiting), default_color(DisplayState::Replied),

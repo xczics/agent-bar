@@ -660,10 +660,7 @@ static void FSEventsCallback(ConstFSEventStreamRef, void* info, size_t, void*,
                                         backing:NSBackingStoreBuffered
                                           defer:NO];
   _panel.level = NSFloatingWindowLevel;
-  _panel.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces |
-                              NSWindowCollectionBehaviorStationary |
-                              NSWindowCollectionBehaviorFullScreenAuxiliary |
-                              NSWindowCollectionBehaviorIgnoresCycle;
+  [self applySpacesBehavior];
   _panel.floatingPanel = YES;
   _panel.hidesOnDeactivate = NO;
   _panel.becomesKeyOnlyIfNeeded = YES;
@@ -733,6 +730,16 @@ static void FSEventsCallback(ConstFSEventStreamRef, void* info, size_t, void*,
   [_view cacheDisplayInRect:_view.bounds toBitmapImageRep:rep];
   NSData* png = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
   return [png writeToFile:path atomically:YES];
+}
+
+// all_spaces: on every desktop and fixed in Mission Control (not draggable
+// there). Otherwise a normal window of one desktop that Mission Control can
+// move between desktops. Both float over full-screen apps.
+- (void)applySpacesBehavior {
+  NSWindowCollectionBehavior b = NSWindowCollectionBehaviorFullScreenAuxiliary | NSWindowCollectionBehaviorIgnoresCycle;
+  b |= _config.all_spaces ? (NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorStationary)
+                          : NSWindowCollectionBehaviorManaged;
+  _panel.collectionBehavior = b;
 }
 
 // ---- layout & persistence
@@ -925,6 +932,9 @@ static void FSEventsCallback(ConstFSEventStreamRef, void* info, size_t, void*,
   status.state = _config.show_status ? NSControlStateValueOn : NSControlStateValueOff;
   status.enabled = _config.compact;
   status.indentationLevel = 1;
+  NSMenuItem* spaces = [menu addItemWithTitle:@"在所有桌面显示" action:@selector(toggleSpaces) keyEquivalent:@""];
+  spaces.target = self;
+  spaces.state = _config.all_spaces ? NSControlStateValueOn : NSControlStateValueOff;
   NSMenuItem* autostart = [menu addItemWithTitle:@"开机自启" action:@selector(toggleAutostart) keyEquivalent:@""];
   autostart.target = self;
   autostart.state = AutostartEnabled() ? NSControlStateValueOn : NSControlStateValueOff;
@@ -950,9 +960,14 @@ static void FSEventsCallback(ConstFSEventStreamRef, void* info, size_t, void*,
 - (void)updateConfig:(void (^)(BarConfig& c))fn {
   fn(_config);
   [self saveConfig];
+  [self applySpacesBehavior];
   _signature.clear();  // thresholds can change the order
   [self rescan:YES];
   [self relayout];
+}
+
+- (void)toggleSpaces {
+  [self updateConfig:^(BarConfig& c) { c.all_spaces = !c.all_spaces; }];
 }
 
 - (void)toggleNames {
@@ -1010,7 +1025,7 @@ static uint32_t ToRGB(NSColor* color) {
   __weak BarController* _bar;
   NSWindow* _window;
   NSMutableArray<NSColorWell*>* _wells;
-  NSButton *_compact, *_names, *_status, *_autostart;
+  NSButton *_compact, *_names, *_status, *_spaces, *_autostart;
   NSTextField* _stale;
 }
 
@@ -1059,6 +1074,8 @@ static NSTextField* Header(NSString* text) {
   [rows addObject:@[ [NSGridCell emptyContentView], _compact ]];
   [rows addObject:@[ [NSGridCell emptyContentView], _names ]];
   [rows addObject:@[ [NSGridCell emptyContentView], _status ]];
+  _spaces = [self checkbox:@"在所有桌面显示（关闭后可在调度中心拖到别的桌面）" action:@selector(togglesChanged)];
+  [rows addObject:@[ [NSGridCell emptyContentView], _spaces ]];
 
   [rows addObject:@[ Header(@"其他"), [NSGridCell emptyContentView] ]];
   _stale = [NSTextField textFieldWithString:@""];
@@ -1105,6 +1122,7 @@ static NSTextField* Header(NSString* text) {
   _names.state = c.show_names ? NSControlStateValueOn : NSControlStateValueOff;
   _status.state = c.show_status ? NSControlStateValueOn : NSControlStateValueOff;
   _names.enabled = _status.enabled = c.compact;
+  _spaces.state = c.all_spaces ? NSControlStateValueOn : NSControlStateValueOff;
   _stale.integerValue = (NSInteger)std::lround(c.stale_minutes);
   _autostart.state = AutostartEnabled() ? NSControlStateValueOn : NSControlStateValueOff;
 }
@@ -1145,10 +1163,12 @@ static NSTextField* Header(NSString* text) {
   const bool compact = _compact.state == NSControlStateValueOn;
   const bool names = _names.state == NSControlStateValueOn;
   const bool status = _status.state == NSControlStateValueOn;
+  const bool spaces = _spaces.state == NSControlStateValueOn;
   [_bar updateConfig:^(BarConfig& c) {
     c.compact = compact;
     c.show_names = names;
     c.show_status = status;
+    c.all_spaces = spaces;
   }];
   [self sync];
 }

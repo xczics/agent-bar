@@ -1,6 +1,6 @@
 # agent-bar 使用教程
 
-> 本教程与当前代码保持同步，对应版本：**0.0.1**（macOS）。
+> 本教程与当前代码保持同步：已发布版本为 **0.0.1**（macOS），标注“未发布”的功能只在 main 分支上有。
 
 ## 目录
 
@@ -116,11 +116,12 @@ scripts/install.sh
 | 展开列表 · 一行 | 双击 | 标为已读，并用 VS Code 打开该项目 |
 | 任意位置（包括灯和行上） | 按住拖动 | 移动浮窗；按下后移动超过 3 点算拖动，原地松开才算点击 |
 | 展开列表 · “收起” | 单击 | 回到紧凑模式 |
-| 任意位置 | 右键 | 菜单：展开列表/收起、全部标为已读、清理空闲/无响应记录、紧凑模式（及其下的“灯上显示简称”“灯下显示状态”）、开机自启、设置…、退出 |
+| 任意位置 | 右键 | 菜单：展开列表/收起、全部标为已读、清理空闲/无响应记录、紧凑模式（及其下的“灯上显示简称”“灯下显示状态”）、在所有桌面显示、开机自启、设置…、退出 |
 
 说明：
 
-- 浮窗始终置顶，在所有桌面空间（包括全屏应用）都会显示，不会出现在 Dock 和 Cmd+Tab 里，点击它也不会抢走当前窗口的焦点。
+- 浮窗始终置顶，可以显示在全屏应用之上，不会出现在 Dock 和 Cmd+Tab 里，点击它也不会抢走当前窗口的焦点。
+- **桌面（Space）**（未发布）：默认情况下，浮窗属于某一个桌面，在调度中心（四指上划）里可以拖动它、把它拖到别的桌面。在右键菜单或设置里打开“在所有桌面显示”后，它会出现在每个桌面上，但在调度中心里固定不动、不能拖。
 - 浮窗改变大小时，上边缘位置保持不变；左右方向会从离屏幕边缘更近的那一侧往里收或往外长，并且不会超出屏幕。
 - 位置在拖动后保存，下次启动时恢复。
 - 找 VS Code 的顺序：先找 `PATH` 里的 `code`，再找 `/usr/local/bin/code`、`/opt/homebrew/bin/code` 和 VS Code.app 自带的 CLI。都找不到时，改用 `open -b com.microsoft.VSCode <cwd>`。
@@ -132,7 +133,7 @@ scripts/install.sh
 <img src="images/settings.png" width="340" alt="设置窗口">
 
 - **颜色**：每种状态一个取色块，点击后用系统取色器选色；“恢复默认颜色”会还原成上面表格里的默认配色。
-- **显示**：紧凑模式、灯上显示简称、灯下显示状态（后两项只在紧凑模式下有效）。
+- **显示**：紧凑模式、灯上显示简称、灯下显示状态（后两项只在紧凑模式下有效）、在所有桌面显示（未发布）。
 - **其他**：无响应阈值（分钟）、开机自启。
 
 ## 配置文件 bar.ini
@@ -148,6 +149,7 @@ expire_hours=12   # 超过多少小时没有更新的记录会被自动删除（
 compact=1         # 1 = 紧凑模式，0 = 始终显示列表
 show_names=1      # 紧凑模式：灯上方显示项目简称
 show_status=1     # 紧凑模式：灯下方显示状态简写
+all_spaces=0      # 1 = 在所有桌面显示（调度中心里不能拖）；0 = 属于一个桌面（未发布）
 color_waiting=#e5484d   # 各状态颜色（#rrggbb）
 color_replied=#ffc53d
 color_busy=#30a46c
@@ -234,8 +236,8 @@ platform/mac/    agent-bar 的 Cocoa 实现（NSPanel + FSEvents）
 tests/           单元测试（无第三方框架）
 scripts/         安装、卸载、验收、打包
 docs/            设计文档、本教程、截图
-changelog/       已完成的内容（每个版本一个文件，也是 Release 说明）
+changelog/       已完成的内容（每个版本一个文件，也是 Release 说明；unreleased.md 记录尚未发布的内容）
 Handoff.md       正在做和规划中的工作
 ```
 
-发版流程：修改 `CMakeLists.txt` 里的 `project(... VERSION x.y.z)`，写好 `changelog/vx.y.z.md`，然后打 tag `vx.y.z` 并推送。GitHub Actions 会构建 universal 包并创建 Release。
+发版流程：修改 `CMakeLists.txt` 里的 `project(... VERSION x.y.z)`，把 `changelog/unreleased.md` 改名为 `changelog/vx.y.z.md`（并改好标题），然后打 tag `vx.y.z` 并推送。GitHub Actions 会构建 universal 包并创建 Release。

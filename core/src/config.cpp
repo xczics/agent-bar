@@ -81,6 +81,8 @@ BarConfig parse_bar_ini(std::string_view text) {
       c.show_names = v != 0;
     } else if (key == "show_status") {
       c.show_status = v != 0;
+    } else if (key == "all_spaces") {
+      c.all_spaces = v != 0;
     }
   }
   c.has_position = has_x && has_top;
@@ -99,6 +101,7 @@ std::string format_bar_ini(const BarConfig& c) {
   o << "compact=" << (c.compact ? 1 : 0) << "\n";
   o << "show_names=" << (c.show_names ? 1 : 0) << "\n";
   o << "show_status=" << (c.show_status ? 1 : 0) << "\n";
+  o << "all_spaces=" << (c.all_spaces ? 1 : 0) << "\n";
   for (DisplayState d : kAllDisplayStates) {
     char hex[8];
     std::snprintf(hex, sizeof hex, "#%06x", static_cast<unsigned>(c.color(d)));
