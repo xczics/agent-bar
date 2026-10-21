@@ -13,8 +13,11 @@ scripts/acceptance.sh && scripts/bar-smoke.sh
 ```
 
 Test scripts use a throwaway `AGENT_STATUS_DIR`; never test against the real
-`~/.claude`. `agent-bar --snapshot out.png [compact|expanded]` renders the UI
-without screen-recording permission — use it to check visual changes.
+`~/.claude`. `agent-bar --snapshot out.png [compact|expanded|settings]` renders
+the UI without screen-recording permission — use it to check visual changes.
+The user prefers resource measurements (CPU/memory) on their real installed
+instance (`~/.claude/bin/agent-bar`) over extra test windows popping up on
+their screen; keep any GUI test instance short-lived.
 
 ## Documentation rules (from the user)
 
