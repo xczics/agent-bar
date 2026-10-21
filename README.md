@@ -139,10 +139,6 @@ build/bin/agent-bar --snapshot /tmp/a.png    # 离屏渲染界面，不需要屏
 
 **项目文档**：正在做和规划中的工作记在 [Handoff.md](Handoff.md)；已完成的内容记在 [changelog/](changelog/)；用法以 [教程](docs/tutorial.md) 为准。
 
-## 开发
-
-想为你喜欢的 agent 添加支持，或者参与开发，请看 [开发指南](docs/development.md)（未发布：内容对应 main 分支）。
-
 ## License
 
 [MIT](LICENSE)
