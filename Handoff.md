@@ -19,7 +19,6 @@
 - [ ] **紧凑模式自动收起**：展开后，鼠标离开浮窗 N 秒自动收回紧凑模式（可选，等用户确认要不要）。
 - [ ] **签名与公证**：目前只有 ad-hoc 签名。用浏览器下载后需要运行 install.sh 才能去掉隔离属性。
 
-- [ ] **进程消失立即熄灯**：Claude 进程被直接杀掉时 `SessionEnd` 不会触发，现在要 10 分钟后才显示“无响应”。可以定期对照 `~/.claude/sessions/` 的登记：登记还在、进程已经不在的，就移除那盏灯。（已提议，等用户确认）
 - [ ] **后台任务通知显示成人话**：`<task-notification>…` 这类提示词显示成“后台任务完成”。（已提议，等用户确认）
 - [ ] **点击跳转按运行形式区分**：现在点击总是执行 `code <cwd>`。会话登记里有 `entrypoint`（例如 `claude-vscode`、`cli`），可以据此对终端会话改为激活对应的终端或 tmux 窗口。
 - [ ] **支持其他 agent**：adapter 框架已在 v0.0.2 完成（见 docs/development.md），还没有写任何具体的第三方 adapter。下一步：确认 Codex CLI、Gemini CLI 等的 hook 或 notify 格式，写对应的 adapter，并给 install.sh 加可选的配置步骤。
@@ -39,4 +38,5 @@
 - 本机没有 Python 原型，“互通”是按协议格式验证的：在 `acceptance.sh` 里用 Python 模拟原型的写法。
 - 浮窗除了 `unread`，还会写**新的**状态文件：自动发现会话时，从 Claude Code 的会话登记 `~/.claude/sessions/<pid>.json`（未公开的格式，按尽力而为的方式读取）补建记录，但从不覆盖已有文件。原设计只允许浮窗写 `unread`。
 - 默认配色按用户偏好调整：运行中为绿色、空闲为暗绿色、已回复为黄色，并新增设置窗口用于自定义颜色。
+- 用户实测：关掉 VS Code 窗口或直接结束 Claude 进程时，`SessionEnd` 都会触发，灯会立即熄灭。所以不需要额外的进程存活检测。
 - 观察到 Claude Code 现在会热加载 settings.json 里的 hooks，设计文档中“安装后需要重启会话”这一条可能已经过时。
