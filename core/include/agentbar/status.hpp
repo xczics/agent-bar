@@ -1,0 +1,120 @@
+// Platform-independent status logic: the hook event -> state machine, session
+// parsing, display derivation and ordering. No file system access here.
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include <nlohmann/json.hpp>
+
+namespace agentbar {
+
+// ordered_json keeps key order of existing files, so unknown fields survive in place.
+using json = nlohmann::ordered_json;
+
+inline constexpr int kProtocolVersion = 1;
+inline constexpr std::size_t kPromptDetailChars = 60;
+inline constexpr std::size_t kMessageDetailChars = 200;
+inline constexpr std::size_t kDisplayDetailChars = 48;
+
+// Fields of the Claude Code hook stdin payload that we use.
+struct HookEvent {
+  std::string session_id;
+  std::string event;  // hook_event_name
+  std::string cwd;
+  std::string tool_name;
+  std::string prompt;
+  std::string message;
+};
+
+// Parses the hook stdin JSON. Returns nullopt for invalid JSON, a non-object,
+// or a missing session_id / hook_event_name. Never throws.
+std::optional<HookEvent> parse_hook_input(std::string_view raw);
+
+// Only [A-Za-z0-9_-], non-empty, at most 128 bytes.
+bool is_valid_session_id(std::string_view id);
+
+// Truncates to at most max_chars Unicode code points without splitting a
+// multi-byte sequence. Sets *truncated when anything was cut.
+std::string utf8_truncate(std::string_view s, std::size_t max_chars, bool* truncated = nullptr);
+
+// Replaces \r, \n and \t with spaces.
+std::string flatten_whitespace(std::string_view s);
+
+// Last path component of cwd ("/a/b/" -> "b"); handles both / and \.
+std::string project_name(std::string_view cwd);
+
+enum class Action { Ignore, Write, Delete };
+
+struct Transition {
+  Action action = Action::Ignore;
+  json doc;  // the new file content when action == Write
+};
+
+// The state machine from docs/design.md. `old` is the current file content or
+// nullptr when the file does not exist (or is unreadable).
+Transition apply_event(const json* old, const HookEvent& ev, double now);
+
+// ---- reading side (agent-bar) ----
+
+enum class DisplayState { Waiting, Replied, Busy, Stale, Idle };
+
+struct Session {
+  std::string id;
+  std::string project;
+  std::string cwd;
+  std::string state;
+  std::string detail;
+  bool unread = false;
+  double since = 0;
+  double updated = 0;
+};
+
+// Builds a Session from a status file. `id` is the file stem (authoritative).
+// Returns nullopt if the document is not an object. Missing fields get defaults.
+std::optional<Session> session_from_json(const json& j, std::string_view id);
+
+DisplayState display_state(const Session& s, double now, double stale_after);
+int display_rank(DisplayState d);  // waiting=0 ... idle=4
+const char* display_label(DisplayState d);
+const char* display_short_label(DisplayState d);  // compact mode: "确认", "运行", ...
+std::uint32_t display_color(DisplayState d);  // 0xRRGGBB
+
+// Unread first, then waiting > replied > busy > stale > idle, then updated desc.
+void sort_sessions(std::vector<Session>& sessions, double now, double stale_after);
+
+// "12s", "3m", "2h", "4d".
+std::string format_elapsed(double seconds);
+
+// Detail for display: truncated to kDisplayDetailChars plus "…".
+std::string display_detail(std::string_view detail);
+
+// "Agents  N 运行  M 未读"
+std::string title_text(const std::vector<Session>& sessions, double now, double stale_after);
+
+// Compact mode: one light per session, up to kLightsPerRow per row and
+// kMaxLightRows rows. When sessions don't fit, the last cell becomes "+N".
+inline constexpr int kLightsPerRow = 6;
+inline constexpr int kMaxLightRows = 3;
+
+struct LightGrid {
+  int lights = 0;    // sessions drawn as lights (the first `lights` in sort order)
+  int overflow = 0;  // sessions behind the "+N" cell (0 = no such cell)
+  int cols = 0;
+  int rows = 0;
+};
+LightGrid light_grid(std::size_t sessions, int per_row = kLightsPerRow, int max_rows = kMaxLightRows);
+
+// Short tag for a project shown above its light: names up to 6 columns stay
+// as-is; multi-word names (-, _, space, .) become initials ("agent-bar" -> "AB");
+// otherwise the first 5 columns plus "…". CJK characters count as 2 columns.
+std::string short_name(std::string_view project);
+
+// "运行中 · 3m"
+std::string status_text(const Session& s, double now, double stale_after);
+
+}  // namespace agentbar

@@ -1,0 +1,528 @@
+// Unit tests for core/. Deliberately dependency-free: a tiny CHECK macro and a
+// registry of test functions. Run: ./build/bin/core_tests
+#include <unistd.h>
+
+#include <cstdio>
+#include <cstdlib>
+#include <functional>
+#include <string>
+#include <vector>
+
+#include "agentbar/config.hpp"
+#include "agentbar/settings.hpp"
+#include "agentbar/status.hpp"
+#include "agentbar/store.hpp"
+
+using namespace agentbar;
+
+namespace {
+
+int g_failures = 0;
+std::vector<std::pair<const char*, std::function<void()>>>& registry() {
+  static std::vector<std::pair<const char*, std::function<void()>>> r;
+  return r;
+}
+struct Register {
+  Register(const char* name, std::function<void()> fn) { registry().emplace_back(name, fn); }
+};
+
+#define TEST(name)                                  \
+  static void name();                               \
+  static Register reg_##name(#name, name);          \
+  static void name()
+
+#define CHECK(cond)                                                          \
+  do {                                                                       \
+    if (!(cond)) {                                                           \
+      ++g_failures;                                                          \
+      std::fprintf(stderr, "  FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+    }                                                                        \
+  } while (0)
+
+#define CHECK_EQ(a, b)                                                                     \
+  do {                                                                                     \
+    auto _a = (a);                                                                         \
+    auto _b = (b);                                                                         \
+    if (!(_a == _b)) {                                                                     \
+      ++g_failures;                                                                        \
+      std::fprintf(stderr, "  FAIL %s:%d: %s == %s\n", __FILE__, __LINE__, #a, #b);        \
+    }                                                                                      \
+  } while (0)
+
+HookEvent ev(const char* event, const char* extra_field = nullptr, const char* value = "") {
+  HookEvent e;
+  e.session_id = "s1";
+  e.event = event;
+  e.cwd = "/Users/me/code/my-app";
+  if (extra_field) {
+    std::string f = extra_field;
+    if (f == "prompt") e.prompt = value;
+    if (f == "tool_name") e.tool_name = value;
+    if (f == "message") e.message = value;
+  }
+  return e;
+}
+
+json doc_with(const char* state, bool unread, const char* detail, double since = 100) {
+  return json{{"v", 1},          {"session_id", "s1"}, {"project", "my-app"},
+              {"cwd", "/x/my-app"}, {"state", state},   {"detail", detail},
+              {"unread", unread},  {"since", since},    {"updated", since}};
+}
+
+std::string make_temp_dir() {
+  char tmpl[] = "/tmp/agentbar-test-XXXXXX";
+  const char* d = mkdtemp(tmpl);
+  return d ? d : "/tmp";
+}
+
+}  // namespace
+
+// ---------- hook input ----------
+
+TEST(parse_hook_input_valid) {
+  auto e = parse_hook_input(
+      R"({"session_id":"abc","hook_event_name":"PreToolUse","cwd":"/a/b","tool_name":"Bash","extra":1})");
+  CHECK(e.has_value());
+  CHECK_EQ(e->session_id, std::string("abc"));
+  CHECK_EQ(e->event, std::string("PreToolUse"));
+  CHECK_EQ(e->tool_name, std::string("Bash"));
+}
+
+TEST(parse_hook_input_invalid) {
+  CHECK(!parse_hook_input(""));
+  CHECK(!parse_hook_input("not json"));
+  CHECK(!parse_hook_input("[1,2]"));
+  CHECK(!parse_hook_input(R"({"hook_event_name":"Stop"})"));
+  CHECK(!parse_hook_input(R"({"session_id":"a"})"));
+  CHECK(!parse_hook_input(R"({"session_id":5,"hook_event_name":"Stop"})"));
+}
+
+TEST(session_id_validation) {
+  CHECK(is_valid_session_id("abc-DEF_123"));
+  CHECK(is_valid_session_id("3f2a1b7c-0000-4000-8000-1234567890ab"));
+  CHECK(!is_valid_session_id(""));
+  CHECK(!is_valid_session_id("../etc"));
+  CHECK(!is_valid_session_id("a/b"));
+  CHECK(!is_valid_session_id("a.b"));
+  CHECK(!is_valid_session_id("a b"));
+  CHECK(!is_valid_session_id(std::string(129, 'a')));
+}
+
+TEST(utf8_truncation) {
+  bool cut = false;
+  CHECK_EQ(utf8_truncate("hello", 3, &cut), std::string("hel"));
+  CHECK(cut);
+  CHECK_EQ(utf8_truncate("hello", 5, &cut), std::string("hello"));
+  CHECK(!cut);
+  CHECK_EQ(utf8_truncate("你好世界", 2), std::string("你好"));
+  CHECK_EQ(utf8_truncate("a😀b", 2), std::string("a😀"));
+  CHECK_EQ(utf8_truncate("", 3), std::string(""));
+  std::string sixty_one(61, 'x');
+  CHECK_EQ(utf8_truncate(sixty_one, 60).size(), std::size_t(60));
+}
+
+TEST(project_names) {
+  CHECK_EQ(project_name("/Users/me/code/my-app"), std::string("my-app"));
+  CHECK_EQ(project_name("/Users/me/code/my-app/"), std::string("my-app"));
+  CHECK_EQ(project_name("C:\\work\\proj"), std::string("proj"));
+  CHECK_EQ(project_name("proj"), std::string("proj"));
+  CHECK_EQ(project_name("/"), std::string("/"));
+}
+
+// ---------- state machine: one test per row of the mapping table ----------
+
+TEST(map_session_start) {
+  auto t = apply_event(nullptr, ev("SessionStart"), 1000);
+  CHECK(t.action == Action::Write);
+  CHECK_EQ(t.doc["state"].get<std::string>(), std::string("idle"));
+  CHECK_EQ(t.doc["unread"].get<bool>(), false);
+  CHECK_EQ(t.doc["detail"].get<std::string>(), std::string(""));
+  CHECK_EQ(t.doc["project"].get<std::string>(), std::string("my-app"));
+  CHECK_EQ(t.doc["cwd"].get<std::string>(), std::string("/Users/me/code/my-app"));
+  CHECK_EQ(t.doc["v"].get<int>(), 1);
+  CHECK_EQ(t.doc["session_id"].get<std::string>(), std::string("s1"));
+  CHECK_EQ(t.doc["since"].get<double>(), 1000.0);
+  CHECK_EQ(t.doc["updated"].get<double>(), 1000.0);
+}
+
+TEST(map_user_prompt_submit) {
+  json old = doc_with("replied", true, "x");
+  std::string prompt = "line1\nline2\r\n" + std::string(100, 'z');
+  auto t = apply_event(&old, ev("UserPromptSubmit", "prompt", prompt.c_str()), 1000);
+  CHECK_EQ(t.doc["state"].get<std::string>(), std::string("busy"));
+  CHECK_EQ(t.doc["unread"].get<bool>(), false);
+  auto detail = t.doc["detail"].get<std::string>();
+  CHECK_EQ(detail.substr(0, 13), std::string("line1 line2  "));
+  CHECK_EQ(detail.size(), std::size_t(60));
+}
+
+TEST(map_user_prompt_multibyte) {
+  std::string prompt;
+  for (int i = 0; i < 70; ++i) prompt += "字";
+  auto t = apply_event(nullptr, ev("UserPromptSubmit", "prompt", prompt.c_str()), 1);
+  CHECK_EQ(t.doc["detail"].get<std::string>().size(), std::size_t(60 * 3));
+}
+
+TEST(map_pre_tool_use) {
+  json old = doc_with("busy", false, "prompt text");
+  auto t = apply_event(&old, ev("PreToolUse", "tool_name", "Bash"), 1000);
+  CHECK_EQ(t.doc["state"].get<std::string>(), std::string("busy"));
+  CHECK_EQ(t.doc["detail"].get<std::string>(), std::string("Bash"));
+  CHECK_EQ(t.doc["unread"].get<bool>(), false);
+}
+
+TEST(map_post_tool_use_keeps_detail) {
+  json old = doc_with("busy", false, "Edit");
+  auto t = apply_event(&old, ev("PostToolUse", "tool_name", "Edit"), 1000);
+  CHECK_EQ(t.doc["state"].get<std::string>(), std::string("busy"));
+  CHECK_EQ(t.doc["detail"].get<std::string>(), std::string("Edit"));
+  CHECK_EQ(t.doc["unread"].get<bool>(), false);
+}
+
+TEST(map_notification_to_waiting) {
+  json old = doc_with("busy", false, "Bash");
+  auto t = apply_event(&old, ev("Notification", "message", "Claude needs your permission"), 1000);
+  CHECK_EQ(t.doc["state"].get<std::string>(), std::string("waiting"));
+  CHECK_EQ(t.doc["unread"].get<bool>(), true);
+  CHECK_EQ(t.doc["detail"].get<std::string>(), std::string("Claude needs your permission"));
+}
+
+TEST(map_notification_after_replied_keeps_state) {
+  json old = doc_with("replied", false, "", 500);
+  auto t = apply_event(&old, ev("Notification", "message", "Claude is waiting for your input"), 1000);
+  CHECK_EQ(t.doc["state"].get<std::string>(), std::string("replied"));
+  CHECK_EQ(t.doc["unread"].get<bool>(), false);  // read state not reset
+  CHECK_EQ(t.doc["detail"].get<std::string>(), std::string(""));
+  CHECK_EQ(t.doc["since"].get<double>(), 500.0);
+  CHECK_EQ(t.doc["updated"].get<double>(), 1000.0);
+
+  json old_unread = doc_with("replied", true, "");
+  auto t2 = apply_event(&old_unread, ev("Notification", "message", "x"), 1000);
+  CHECK_EQ(t2.doc["unread"].get<bool>(), true);
+}
+
+TEST(map_stop) {
+  json old = doc_with("busy", false, "Bash");
+  auto t = apply_event(&old, ev("Stop"), 1000);
+  CHECK_EQ(t.doc["state"].get<std::string>(), std::string("replied"));
+  CHECK_EQ(t.doc["unread"].get<bool>(), true);
+  CHECK_EQ(t.doc["detail"].get<std::string>(), std::string(""));
+}
+
+TEST(map_session_end_deletes) {
+  json old = doc_with("busy", false, "Bash");
+  CHECK(apply_event(&old, ev("SessionEnd"), 1000).action == Action::Delete);
+  CHECK(apply_event(nullptr, ev("SessionEnd"), 1000).action == Action::Delete);
+}
+
+TEST(map_unknown_event_ignored) {
+  CHECK(apply_event(nullptr, ev("PreCompact"), 1000).action == Action::Ignore);
+}
+
+TEST(since_rules) {
+  json old = doc_with("busy", false, "Bash", 100);
+  auto same = apply_event(&old, ev("PreToolUse", "tool_name", "Read"), 1000);
+  CHECK_EQ(same.doc["since"].get<double>(), 100.0);  // state unchanged
+  auto changed = apply_event(&old, ev("Stop"), 1000);
+  CHECK_EQ(changed.doc["since"].get<double>(), 1000.0);
+}
+
+TEST(unknown_fields_preserved) {
+  json old = doc_with("busy", false, "Bash");
+  old["future_field"] = {{"a", 1}};
+  auto t = apply_event(&old, ev("Stop"), 1000);
+  CHECK(t.doc.contains("future_field"));
+  CHECK_EQ(t.doc["future_field"]["a"].get<int>(), 1);
+}
+
+TEST(missing_cwd_keeps_old_project) {
+  json old = doc_with("busy", false, "Bash");
+  HookEvent e = ev("Stop");
+  e.cwd.clear();
+  auto t = apply_event(&old, e, 1000);
+  CHECK_EQ(t.doc["project"].get<std::string>(), std::string("my-app"));
+}
+
+// ---------- display ----------
+
+TEST(display_states) {
+  Session s;
+  s.updated = 1000;
+  s.state = "waiting";
+  CHECK(display_state(s, 1000, 600) == DisplayState::Waiting);
+  s.state = "replied";
+  CHECK(display_state(s, 1000, 600) == DisplayState::Replied);
+  s.state = "busy";
+  CHECK(display_state(s, 1500, 600) == DisplayState::Busy);
+  CHECK(display_state(s, 1601, 600) == DisplayState::Stale);
+  s.state = "idle";
+  CHECK(display_state(s, 99999, 600) == DisplayState::Idle);
+  s.state = "garbage";
+  CHECK(display_state(s, 1000, 600) == DisplayState::Idle);
+  CHECK_EQ(std::string(display_label(DisplayState::Stale)), std::string("无响应?"));
+  CHECK_EQ(display_color(DisplayState::Waiting), 0xe5484du);
+}
+
+TEST(sorting) {
+  auto mk = [](const char* id, const char* state, bool unread, double updated) {
+    Session s;
+    s.id = id;
+    s.state = state;
+    s.unread = unread;
+    s.updated = updated;
+    return s;
+  };
+  double now = 10000;
+  std::vector<Session> v = {
+      mk("idle", "idle", false, 9990),
+      mk("stale", "busy", false, 100),
+      mk("busy_old", "busy", false, 9000),
+      mk("busy_new", "busy", false, 9500),
+      mk("replied_read", "replied", false, 9999),
+      mk("waiting_read", "waiting", false, 1),
+      mk("replied_unread", "replied", true, 9999),
+      mk("waiting_unread", "waiting", true, 5),
+  };
+  sort_sessions(v, now, 600);
+  std::vector<std::string> ids;
+  for (auto& s : v) ids.push_back(s.id);
+  std::vector<std::string> want = {"waiting_unread", "replied_unread", "waiting_read",
+                                   "replied_read",   "busy_new",       "busy_old",
+                                   "stale",          "idle"};
+  CHECK(ids == want);
+}
+
+TEST(elapsed_format) {
+  CHECK_EQ(format_elapsed(0), std::string("0s"));
+  CHECK_EQ(format_elapsed(-5), std::string("0s"));
+  CHECK_EQ(format_elapsed(59.9), std::string("59s"));
+  CHECK_EQ(format_elapsed(60), std::string("1m"));
+  CHECK_EQ(format_elapsed(3599), std::string("59m"));
+  CHECK_EQ(format_elapsed(3600), std::string("1h"));
+  CHECK_EQ(format_elapsed(86400 * 3), std::string("3d"));
+}
+
+TEST(detail_and_texts) {
+  CHECK_EQ(display_detail("short"), std::string("short"));
+  CHECK_EQ(display_detail(std::string(49, 'a')), std::string(48, 'a') + "…");
+  Session s;
+  s.state = "busy";
+  s.since = 1000 - 180;
+  s.updated = 1000;
+  s.unread = true;
+  CHECK_EQ(status_text(s, 1000, 600), std::string("运行中 · 3m"));
+  CHECK_EQ(title_text({s}, 1000, 600), std::string("Agents  1 运行  1 未读"));
+}
+
+TEST(session_from_json_defaults) {
+  auto s = session_from_json(json{{"state", "busy"}, {"cwd", "/a/proj"}, {"updated", 5}}, "id1");
+  CHECK(s.has_value());
+  CHECK_EQ(s->project, std::string("proj"));
+  CHECK_EQ(s->since, 5.0);
+  CHECK(!session_from_json(json::array(), "x"));
+}
+
+TEST(light_grid_layout) {
+  auto g = light_grid(0);
+  CHECK(g.lights == 0 && g.overflow == 0 && g.cols == 0 && g.rows == 0);
+  g = light_grid(4);
+  CHECK(g.lights == 4 && g.overflow == 0 && g.cols == 4 && g.rows == 1);
+  g = light_grid(6);
+  CHECK(g.cols == 6 && g.rows == 1);
+  g = light_grid(7);
+  CHECK(g.lights == 7 && g.cols == 6 && g.rows == 2);
+  g = light_grid(18);
+  CHECK(g.lights == 18 && g.overflow == 0 && g.rows == 3);
+  g = light_grid(19);
+  CHECK(g.lights == 17 && g.overflow == 2 && g.cols == 6 && g.rows == 3);
+  g = light_grid(40);
+  CHECK(g.lights == 17 && g.overflow == 23);
+}
+
+TEST(short_names) {
+  CHECK_EQ(short_name("notes"), std::string("notes"));
+  CHECK_EQ(short_name("webapp"), std::string("webapp"));
+  CHECK_EQ(short_name("agent-bar"), std::string("AB"));
+  CHECK_EQ(short_name("my_cool.project"), std::string("MCP"));
+  CHECK_EQ(short_name("wargame"), std::string("warga…"));
+  CHECK_EQ(short_name("项目"), std::string("项目"));
+  CHECK_EQ(short_name("前端项目"), std::string("前端…"));
+  CHECK_EQ(short_name(""), std::string(""));
+  CHECK_EQ(std::string(display_short_label(DisplayState::Waiting)), std::string("确认"));
+}
+
+// ---------- config ----------
+
+TEST(bar_ini_roundtrip) {
+  BarConfig c = parse_bar_ini("# c\nx=120.5\ntop = 800\nstale_minutes=3\nexpire_hours=-1\nbad\nfoo=1\n");
+  CHECK(c.has_position);
+  CHECK_EQ(c.x, 120.5);
+  CHECK_EQ(c.top, 800.0);
+  CHECK_EQ(c.stale_minutes, 3.0);
+  CHECK_EQ(c.expire_hours, 12.0);  // invalid value ignored
+  BarConfig back = parse_bar_ini(format_bar_ini(c));
+  CHECK_EQ(back.x, c.x);
+  CHECK_EQ(back.top, c.top);
+  CHECK_EQ(back.stale_minutes, c.stale_minutes);
+  CHECK(!parse_bar_ini("x=1\n").has_position);
+  CHECK(parse_bar_ini("").compact);
+  CHECK(!parse_bar_ini("compact=0\n").compact);
+  BarConfig off;
+  off.compact = false;
+  CHECK(!parse_bar_ini(format_bar_ini(off)).compact);
+  BarConfig bare = parse_bar_ini("show_names=0\nshow_status=0\n");
+  CHECK(!bare.show_names && !bare.show_status);
+  CHECK(parse_bar_ini(format_bar_ini(BarConfig{})).show_names);
+}
+
+// ---------- settings.json merge ----------
+
+TEST(settings_merge_into_empty) {
+  json s = json::object();
+  CHECK(merge_hooks(s, "/h/.claude/bin/agent-status-hook"));
+  for (const char* e : kHookEvents) {
+    CHECK(s["hooks"][e].is_array());
+    CHECK_EQ(s["hooks"][e].size(), std::size_t(1));
+  }
+  CHECK_EQ(s["hooks"]["PreToolUse"][0]["matcher"].get<std::string>(), std::string("*"));
+  CHECK(!s["hooks"]["Stop"][0].contains("matcher"));
+  CHECK(!merge_hooks(s, "/h/.claude/bin/agent-status-hook"));  // idempotent
+}
+
+TEST(settings_merge_preserves_user_hooks) {
+  json s = json::parse(R"({
+    "model": "opus",
+    "hooks": {
+      "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "my-linter"}]}],
+      "Stop": [{"hooks": [{"type": "command", "command": "python3 ~/status_hook.py"},
+                          {"type": "command", "command": "say done"}]}]
+    }
+  })");
+  CHECK(merge_hooks(s, "/new/agent-status-hook"));
+  CHECK_EQ(s["model"].get<std::string>(), std::string("opus"));
+  CHECK_EQ(s["hooks"]["PreToolUse"].size(), std::size_t(2));
+  CHECK_EQ(s["hooks"]["PreToolUse"][0]["hooks"][0]["command"].get<std::string>(),
+           std::string("my-linter"));
+  // Python prototype replaced, the other Stop hook kept.
+  CHECK_EQ(s["hooks"]["Stop"].size(), std::size_t(2));
+  CHECK_EQ(s["hooks"]["Stop"][0]["hooks"].size(), std::size_t(1));
+  CHECK_EQ(s["hooks"]["Stop"][0]["hooks"][0]["command"].get<std::string>(), std::string("say done"));
+  CHECK_EQ(s["hooks"]["Stop"][1]["hooks"][0]["command"].get<std::string>(),
+           std::string("/new/agent-status-hook"));
+}
+
+TEST(settings_merge_updates_old_path) {
+  json s = json::object();
+  merge_hooks(s, "/old/agent-status-hook");
+  CHECK(merge_hooks(s, "/new/agent-status-hook"));
+  CHECK_EQ(s["hooks"]["Stop"].size(), std::size_t(1));
+  CHECK_EQ(s["hooks"]["Stop"][0]["hooks"][0]["command"].get<std::string>(),
+           std::string("/new/agent-status-hook"));
+}
+
+TEST(settings_remove) {
+  json s = json::parse(R"({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "say done"}]}]}})");
+  merge_hooks(s, "/x/agent-status-hook");
+  CHECK(remove_hooks(s));
+  CHECK_EQ(s["hooks"].size(), std::size_t(1));
+  CHECK_EQ(s["hooks"]["Stop"][0]["hooks"][0]["command"].get<std::string>(), std::string("say done"));
+  json only_ours = json::object();
+  merge_hooks(only_ours, "/x/agent-status-hook");
+  CHECK(remove_hooks(only_ours));
+  CHECK(!only_ours.contains("hooks"));
+  CHECK(!remove_hooks(only_ours));
+}
+
+TEST(command_matching_and_quoting) {
+  CHECK(is_our_hook_command("/Users/a/.claude/bin/agent-status-hook"));
+  CHECK(is_our_hook_command("\"/Users/a b/.claude/bin/agent-status-hook\""));
+  CHECK(is_our_hook_command("C:\\Users\\a\\.claude\\bin\\agent-status-hook.exe"));
+  CHECK(is_our_hook_command("python3 /x/status_hook.py"));
+  CHECK(!is_our_hook_command("/x/agent-status-hook-other"));
+  CHECK(!is_our_hook_command("my-linter"));
+  CHECK_EQ(hook_command_for_path("/a/b"), std::string("/a/b"));
+  CHECK_EQ(hook_command_for_path("/a b/c"), std::string("\"/a b/c\""));
+}
+
+// ---------- store (real files in a temp dir) ----------
+
+TEST(store_event_roundtrip) {
+  std::string dir = make_temp_dir();
+  HookEvent e = ev("UserPromptSubmit", "prompt", "hi");
+  CHECK(store::handle_event(dir, e, 1000) == store::EventResult::Written);
+  auto sessions = store::scan(dir);
+  CHECK_EQ(sessions.size(), std::size_t(1));
+  CHECK_EQ(sessions[0].state, std::string("busy"));
+
+  CHECK(store::handle_event(dir, ev("Stop"), 1010) == store::EventResult::Written);
+  CHECK(store::scan(dir)[0].unread);
+  CHECK(store::mark_read(dir, "s1"));
+  CHECK(!store::mark_read(dir, "s1"));  // already read: no write
+  CHECK(!store::scan(dir)[0].unread);
+  auto doc = store::read_json(store::session_path(dir, "s1"));
+  CHECK_EQ((*doc)["updated"].get<double>(), 1010.0);  // bar only touches unread
+
+  CHECK(store::handle_event(dir, ev("SessionEnd"), 1020) == store::EventResult::Deleted);
+  CHECK(store::scan(dir).empty());
+  CHECK(access(store::session_path(dir, "s1").c_str(), F_OK) != 0);
+
+  HookEvent bad = ev("Stop");
+  bad.session_id = "../evil";
+  CHECK(store::handle_event(dir, bad, 1) == store::EventResult::InvalidId);
+  rmdir(dir.c_str());
+}
+
+TEST(store_scan_skips_bad_files) {
+  std::string dir = make_temp_dir();
+  store::write_file_atomic(dir + "/good.json", R"({"state":"waiting","unread":true,"updated":1})");
+  store::write_file_atomic(dir + "/broken.json", "{not json");
+  store::write_file_atomic(dir + "/x.json.123.tmp", R"({"state":"busy"})");
+  store::write_file_atomic(dir + "/bad.id.json", R"({"state":"busy"})");
+  store::write_file_atomic(dir + "/bar.ini", "x=1");
+  auto sessions = store::scan(dir);
+  CHECK_EQ(sessions.size(), std::size_t(1));
+  CHECK_EQ(sessions[0].id, std::string("good"));
+  std::system(("rm -rf '" + dir + "'").c_str());
+}
+
+TEST(store_cleanup) {
+  std::string dir = make_temp_dir();
+  auto put = [&](const char* id, const char* state, double updated) {
+    json j = {{"state", state}, {"updated", updated}, {"since", updated}};
+    store::write_file_atomic(store::session_path(dir, id), store::dump_json(j));
+  };
+  double now = 100000;
+  put("old", "replied", now - 13 * 3600);
+  put("idle", "idle", now - 10);
+  put("stale", "busy", now - 700);
+  put("busy", "busy", now - 10);
+  put("waiting", "waiting", now - 10);
+  CHECK_EQ(store::cleanup_expired(dir, now, 12 * 3600), 1);
+  CHECK_EQ(store::cleanup_idle_and_stale(dir, now, 600), 2);
+  auto left = store::scan(dir);
+  CHECK_EQ(left.size(), std::size_t(2));
+  std::system(("rm -rf '" + dir + "'").c_str());
+}
+
+TEST(store_lock_timeout) {
+  std::string dir = make_temp_dir();
+  std::string lp = store::lock_path(dir, "s1");
+  store::FileLock held(lp, 50);
+  CHECK(held.locked());
+  // flock locks are per open file description, so a second open in the same
+  // process contends like another process would.
+  store::FileLock second(lp, 20);
+  CHECK(!second.locked());
+  CHECK(store::handle_event(dir, ev("Stop"), 1) == store::EventResult::LockTimeout);
+  std::system(("rm -rf '" + dir + "'").c_str());
+}
+
+int main() {
+  for (auto& [name, fn] : registry()) {
+    int before = g_failures;
+    fn();
+    std::printf("%s %s\n", g_failures == before ? "ok  " : "FAIL", name);
+  }
+  std::printf("\n%zu tests, %d failed checks\n", registry().size(), g_failures);
+  return g_failures == 0 ? 0 : 1;
+}

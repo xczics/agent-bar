@@ -1,0 +1,32 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check tag matches CMake version
+        run: |
+          v="$(sed -n 's/^project(agent-bar VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)"
+          [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME != CMake version $v"; exit 1; }
+      - name: Build, test and package (universal)
+        run: scripts/package.sh
+      - name: Hook acceptance on the packaged binary
+        run: |
+          brew install hyperfine
+          scripts/acceptance.sh dist/agent-bar-*-macos-universal/agent-status-hook
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="changelog/${GITHUB_REF_NAME}.md"
+          [ -f "$notes" ] || notes=/dev/null
+          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.sha256 \
+            --title "agent-bar ${GITHUB_REF_NAME}" --notes-file "$notes"

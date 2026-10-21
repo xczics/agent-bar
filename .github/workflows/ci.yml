@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install hyperfine
+        run: brew install hyperfine
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build -j
+      - name: Unit tests
+        run: ctest --test-dir build --output-on-failure
+      - name: Hook acceptance
+        run: scripts/acceptance.sh build/bin/agent-status-hook
+      - name: Bar smoke test (GUI)
+        run: scripts/bar-smoke.sh build/bin
+      - name: Install script (temporary HOME)
+        run: |
+          export HOME="$(mktemp -d)"
+          scripts/install.sh --hook-only
+          scripts/install.sh --hook-only | grep -q "already up to date"
+          scripts/uninstall.sh
+
+  linux:
+    # core/ and the hook are POSIX; keep them building off macOS too.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build -j
+      - name: Unit tests
+        run: ctest --test-dir build --output-on-failure
+      - name: Hook acceptance
+        run: scripts/acceptance.sh build/bin/agent-status-hook
