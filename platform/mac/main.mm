@@ -329,26 +329,24 @@ static const NSInteger kExpandButton = -3;
   return !dragging;
 }
 
+// Anywhere on the window can be dragged: a press that moves more than a few
+// points moves the window; only a press released in place counts as a click.
 - (void)mouseDown:(NSEvent*)e {
   NSPoint p = [self convertPoint:e.locationInWindow fromView:nil];
   BarController* c = self.controller;
+  if (![self trackClickOrDrag:e]) return;  // it was a drag
+
   if (c.showsCompact) {
     NSInteger light = [self lightAtPoint:p];
     if (light >= 0) {
       [c clickedLight:light];
-    } else if (light == kExpandButton || light == kOverflowCell) {
-      [c setExpanded:YES];
-    } else if ([self trackClickOrDrag:e]) {
-      [c setExpanded:YES];  // a plain click on the background also expands
+    } else {
+      [c setExpanded:YES];  // expand button, "+N" or background
     }
     return;
   }
   if (p.y < kTitleHeight) {
-    if (c.config.compact && NSPointInRect(p, [self collapseButtonRect])) {
-      [c setExpanded:NO];
-      return;
-    }
-    [self trackClickOrDrag:e];
+    if (c.config.compact && NSPointInRect(p, [self collapseButtonRect])) [c setExpanded:NO];
     return;
   }
   NSInteger row = [self rowAtPoint:p];
