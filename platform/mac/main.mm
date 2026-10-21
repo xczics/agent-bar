@@ -55,6 +55,15 @@ static NSColor* RGB(uint32_t c, CGFloat alpha = 1.0) {
                              alpha:alpha];
 }
 
+// Text in a state colour: dark colours (e.g. the "off" green of idle) are
+// lifted toward white so the label stays readable on the dark background.
+static NSColor* TextColor(NSColor* c) {
+  NSColor* rgb = [c colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
+  if (!rgb) return c;
+  const CGFloat lum = 0.2126 * rgb.redComponent + 0.7152 * rgb.greenComponent + 0.0722 * rgb.blueComponent;
+  return lum < 0.45 ? [rgb blendedColorWithFraction:(0.45 - lum) / 0.45 * 0.6 ofColor:NSColor.whiteColor] : rgb;
+}
+
 static NSString* NS(const std::string& s) {
   NSString* r = [[NSString alloc] initWithBytes:s.data() length:s.size() encoding:NSUTF8StringEncoding];
   return r ? r : @"";
@@ -169,6 +178,13 @@ static void OpenInVSCode(const std::string& cwd) {
 - (void)setExpanded:(BOOL)expanded;
 - (void)windowDragged;
 - (NSMenu*)contextMenu;
+- (void)updateConfig:(void (^)(BarConfig& c))fn;
+@end
+
+@interface BarController (Settings)
+// Implemented after SettingsController.
+- (void)openSettings;
+- (BOOL)snapshotSettingsTo:(NSString*)path;
 @end
 
 // ---------------------------------------------------------------- view
@@ -371,7 +387,7 @@ static const NSInteger kExpandButton = -3;
     const Session& s = sessions[i];
     if (!s.unread || !self.layer) continue;
     const DisplayState d = display_state(s, now, stale);
-    [_pulses addObject:[self addPulseAt:l.light(i) color:RGB(display_color(d)) fast:d == DisplayState::Waiting]];
+    [_pulses addObject:[self addPulseAt:l.light(i) color:RGB(self.controller.config.color(d)) fast:d == DisplayState::Waiting]];
   }
 }
 
@@ -481,7 +497,7 @@ static void DrawLight(NSRect r, NSColor* color, BOOL glow, BOOL hollow) {
   for (int i = 0; i < l.grid.lights; ++i) {
     const Session& s = sessions[i];
     const DisplayState d = display_state(s, now, stale);
-    NSColor* color = RGB(display_color(d));
+    NSColor* color = RGB(self.controller.config.color(d));
     NSRect r = l.light(i);
     if (i == self.hover) r = NSInsetRect(r, -1.5, -1.5);
     const BOOL active = d != DisplayState::Idle && d != DisplayState::Stale;
@@ -497,7 +513,7 @@ static void DrawLight(NSRect r, NSColor* color, BOOL glow, BOOL hollow) {
                RGB(0xedeef0, s.unread ? 1.0 : 0.75), NSTextAlignmentCenter);
     }
     if (l.status) {
-      DrawText(NS(display_short_label(d)), l.statusRect(i), statusFont, color, NSTextAlignmentCenter);
+      DrawText(NS(display_short_label(d)), l.statusRect(i), statusFont, TextColor(color), NSTextAlignmentCenter);
     }
   }
   if (l.grid.overflow > 0) {
@@ -560,7 +576,7 @@ static void DrawLight(NSRect r, NSColor* color, BOOL glow, BOOL hollow) {
     const Session& s = sessions[i];
     const CGFloat y = kTitleHeight + i * kRowHeight;
     const DisplayState d = display_state(s, now, stale);
-    NSColor* color = RGB(display_color(d));
+    NSColor* color = RGB(self.controller.config.color(d));
 
     if ((NSInteger)i == self.hover) {
       [RGB(0xffffff, 0.06) setFill];
@@ -585,7 +601,8 @@ static void DrawLight(NSRect r, NSColor* color, BOOL glow, BOOL hollow) {
     }
     NSString* status = NS(status_text(s, now, stale));
     CGFloat statusW = TextWidth(status, small);
-    DrawText(status, NSMakeRect(right - statusW, line + 2, statusW, 15), small, color, NSTextAlignmentRight);
+    DrawText(status, NSMakeRect(right - statusW, line + 2, statusW, 15), small, TextColor(color),
+             NSTextAlignmentRight);
     right -= statusW + 8;
 
     const CGFloat textX = kInset + 16;
@@ -605,7 +622,10 @@ static void DrawLight(NSRect r, NSColor* color, BOOL glow, BOOL hollow) {
 static void FSEventsCallback(ConstFSEventStreamRef, void* info, size_t, void*,
                              const FSEventStreamEventFlags*, const FSEventStreamEventId*);
 
+@class SettingsController;
+
 @implementation BarController {
+  SettingsController* _settings;
   std::string _dir;
   BarConfig _config;
   std::vector<Session> _sessions;
@@ -660,6 +680,7 @@ static void FSEventsCallback(ConstFSEventStreamRef, void* info, size_t, void*,
   _view.wantsLayer = YES;
   _panel.contentView = _view;
 
+  [self discover];
   [self rescan:YES];
   [self placeInitially];
   [_panel orderFrontRegardless];
@@ -850,8 +871,21 @@ static void FSEventsCallback(ConstFSEventStreamRef, void* info, size_t, void*,
 }
 
 - (void)onCleanup {
-  if (store::cleanup_expired(_dir, store::now_seconds(), _config.expire_after_seconds()) > 0)
-    [self scheduleRescan];
+  int changed = store::cleanup_expired(_dir, store::now_seconds(), _config.expire_after_seconds());
+  changed += [self discover];
+  if (changed > 0) [self scheduleRescan];
+}
+
+// Picks up running sessions that have not sent a hook event yet (started
+// before the hooks were installed, or quiet since this bar started).
+- (int)discover {
+  int n = store::discover_sessions(_dir, store::claude_sessions_dir(), store::now_seconds());
+  if (n > 0) {
+    char line[64];
+    std::snprintf(line, sizeof line, "discovered %d session(s)", n);
+    DebugLog(_dir, line);
+  }
+  return n;
 }
 
 // ---- interaction
@@ -897,6 +931,7 @@ static void FSEventsCallback(ConstFSEventStreamRef, void* info, size_t, void*,
   autostart.target = self;
   autostart.state = AutostartEnabled() ? NSControlStateValueOn : NSControlStateValueOff;
   [menu addItem:[NSMenuItem separatorItem]];
+  [menu addItemWithTitle:@"设置…" action:@selector(openSettings) keyEquivalent:@""].target = self;
   NSMenuItem* version = [menu addItemWithTitle:@"agent-bar " AGENTBAR_VERSION action:nil keyEquivalent:@""];
   version.enabled = NO;
   [menu addItemWithTitle:@"退出" action:@selector(quit) keyEquivalent:@""].target = self;
@@ -911,6 +946,14 @@ static void FSEventsCallback(ConstFSEventStreamRef, void* info, size_t, void*,
   _config.compact = !_config.compact;
   _expanded = NO;
   [self saveConfig];
+  [self relayout];
+}
+
+- (void)updateConfig:(void (^)(BarConfig& c))fn {
+  fn(_config);
+  [self saveConfig];
+  _signature.clear();  // thresholds can change the order
+  [self rescan:YES];
   [self relayout];
 }
 
@@ -950,6 +993,199 @@ static void FSEventsCallback(ConstFSEventStreamRef, void* info, size_t, void*, c
   [(__bridge BarController*)info scheduleRescan];
 }
 
+// ---------------------------------------------------------------- settings window
+
+static uint32_t ToRGB(NSColor* color) {
+  NSColor* c = [color colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
+  if (!c) return 0;
+  auto ch = [](CGFloat v) { return (uint32_t)std::lround(std::clamp(v, 0.0, 1.0) * 255); };
+  return (ch(c.redComponent) << 16) | (ch(c.greenComponent) << 8) | ch(c.blueComponent);
+}
+
+@interface SettingsController : NSObject <NSWindowDelegate>
+- (instancetype)initWithBar:(BarController*)bar;
+- (void)show;
+- (NSView*)contentForSnapshot;
+@end
+
+@implementation SettingsController {
+  __weak BarController* _bar;
+  NSWindow* _window;
+  NSMutableArray<NSColorWell*>* _wells;
+  NSButton *_compact, *_names, *_status, *_autostart;
+  NSTextField* _stale;
+}
+
+- (instancetype)initWithBar:(BarController*)bar {
+  if ((self = [super init])) _bar = bar;
+  return self;
+}
+
+static NSTextField* Label(NSString* text) {
+  NSTextField* f = [NSTextField labelWithString:text];
+  f.alignment = NSTextAlignmentRight;
+  return f;
+}
+
+static NSTextField* Header(NSString* text) {
+  NSTextField* f = [NSTextField labelWithString:text];
+  f.font = [NSFont boldSystemFontOfSize:NSFont.systemFontSize];
+  return f;
+}
+
+- (NSButton*)checkbox:(NSString*)title action:(SEL)action {
+  NSButton* b = [NSButton checkboxWithTitle:title target:self action:action];
+  return b;
+}
+
+- (void)build {
+  _wells = [NSMutableArray array];
+  NSMutableArray<NSArray<NSView*>*>* rows = [NSMutableArray array];
+  [rows addObject:@[ Header(@"颜色"), [NSGridCell emptyContentView] ]];
+  for (DisplayState d : kAllDisplayStates) {
+    NSColorWell* well = [NSColorWell colorWellWithStyle:NSColorWellStyleMinimal];
+    well.tag = static_cast<NSInteger>(d);
+    well.target = self;
+    well.action = @selector(colorChanged:);
+    [well.widthAnchor constraintEqualToConstant:44].active = YES;
+    [_wells addObject:well];
+    [rows addObject:@[ Label(NS(display_label(d))), well ]];
+  }
+  NSButton* reset = [NSButton buttonWithTitle:@"恢复默认颜色" target:self action:@selector(resetColors)];
+  [rows addObject:@[ [NSGridCell emptyContentView], reset ]];
+
+  [rows addObject:@[ Header(@"显示"), [NSGridCell emptyContentView] ]];
+  _compact = [self checkbox:@"紧凑模式（只显示灯）" action:@selector(togglesChanged)];
+  _names = [self checkbox:@"灯上显示简称" action:@selector(togglesChanged)];
+  _status = [self checkbox:@"灯下显示状态" action:@selector(togglesChanged)];
+  [rows addObject:@[ [NSGridCell emptyContentView], _compact ]];
+  [rows addObject:@[ [NSGridCell emptyContentView], _names ]];
+  [rows addObject:@[ [NSGridCell emptyContentView], _status ]];
+
+  [rows addObject:@[ Header(@"其他"), [NSGridCell emptyContentView] ]];
+  _stale = [NSTextField textFieldWithString:@""];
+  NSNumberFormatter* fmt = [[NSNumberFormatter alloc] init];
+  fmt.minimum = @1;
+  fmt.maximum = @1440;
+  fmt.maximumFractionDigits = 0;
+  _stale.formatter = fmt;
+  _stale.target = self;
+  _stale.action = @selector(staleChanged);
+  [_stale.widthAnchor constraintEqualToConstant:60].active = YES;
+  [rows addObject:@[ Label(@"无响应阈值（分钟）"), _stale ]];
+  _autostart = [self checkbox:@"开机自启" action:@selector(autostartChanged)];
+  [rows addObject:@[ [NSGridCell emptyContentView], _autostart ]];
+
+  NSGridView* grid = [NSGridView gridViewWithViews:rows];
+  grid.rowSpacing = 8;
+  grid.columnSpacing = 12;
+  grid.translatesAutoresizingMaskIntoConstraints = NO;
+  [grid columnAtIndex:0].xPlacement = NSGridCellPlacementTrailing;
+  for (NSInteger i = 0; i < grid.numberOfRows; ++i) [grid rowAtIndex:i].yPlacement = NSGridCellPlacementCenter;
+
+  _window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 340, 420)
+                                        styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
+                                          backing:NSBackingStoreBuffered
+                                            defer:NO];
+  _window.title = @"agent-bar 设置";
+  _window.releasedWhenClosed = NO;
+  _window.delegate = self;
+  NSView* content = _window.contentView;
+  [content addSubview:grid];
+  [NSLayoutConstraint activateConstraints:@[
+    [grid.topAnchor constraintEqualToAnchor:content.topAnchor constant:20],
+    [grid.bottomAnchor constraintEqualToAnchor:content.bottomAnchor constant:-20],
+    [grid.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:24],
+    [grid.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-24],
+  ]];
+}
+
+- (void)sync {
+  const BarConfig& c = _bar.config;
+  for (NSColorWell* well in _wells) well.color = RGB(c.color(static_cast<DisplayState>(well.tag)));
+  _compact.state = c.compact ? NSControlStateValueOn : NSControlStateValueOff;
+  _names.state = c.show_names ? NSControlStateValueOn : NSControlStateValueOff;
+  _status.state = c.show_status ? NSControlStateValueOn : NSControlStateValueOff;
+  _names.enabled = _status.enabled = c.compact;
+  _stale.integerValue = (NSInteger)std::lround(c.stale_minutes);
+  _autostart.state = AutostartEnabled() ? NSControlStateValueOn : NSControlStateValueOff;
+}
+
+- (NSView*)contentForSnapshot {
+  if (!_window) [self build];
+  [self sync];
+  [_window layoutIfNeeded];
+  return _window.contentView;
+}
+
+- (void)show {
+  if (!_window) {
+    [self build];
+    [_window center];
+  }
+  [self sync];
+  // An accessory app must activate itself for the window and colour panel to take focus.
+  [NSApp activateIgnoringOtherApps:YES];
+  [_window makeKeyAndOrderFront:nil];
+}
+
+- (void)colorChanged:(NSColorWell*)well {
+  const uint32_t rgb = ToRGB(well.color);
+  const auto d = static_cast<DisplayState>(well.tag);
+  [_bar updateConfig:^(BarConfig& c) { c.set_color(d, rgb); }];
+}
+
+- (void)resetColors {
+  [_bar updateConfig:^(BarConfig& c) {
+    for (DisplayState d : kAllDisplayStates) c.set_color(d, default_color(d));
+  }];
+  [NSColorPanel.sharedColorPanel orderOut:nil];
+  [self sync];
+}
+
+- (void)togglesChanged {
+  const bool compact = _compact.state == NSControlStateValueOn;
+  const bool names = _names.state == NSControlStateValueOn;
+  const bool status = _status.state == NSControlStateValueOn;
+  [_bar updateConfig:^(BarConfig& c) {
+    c.compact = compact;
+    c.show_names = names;
+    c.show_status = status;
+  }];
+  [self sync];
+}
+
+- (void)staleChanged {
+  const double minutes = std::max<NSInteger>(1, _stale.integerValue);
+  [_bar updateConfig:^(BarConfig& c) { c.stale_minutes = minutes; }];
+}
+
+- (void)autostartChanged {
+  SetAutostart(_autostart.state == NSControlStateValueOn);
+  [self sync];
+}
+
+- (void)windowWillClose:(NSNotification*)n {
+  [NSColorPanel.sharedColorPanel orderOut:nil];
+}
+
+@end
+
+@implementation BarController (Settings)
+- (void)openSettings {
+  if (!_settings) _settings = [[SettingsController alloc] initWithBar:self];
+  [_settings show];
+}
+
+- (BOOL)snapshotSettingsTo:(NSString*)path {
+  _settings = [[SettingsController alloc] initWithBar:self];
+  NSView* v = [_settings contentForSnapshot];
+  NSBitmapImageRep* rep = [v bitmapImageRepForCachingDisplayInRect:v.bounds];
+  [v cacheDisplayInRect:v.bounds toBitmapImageRep:rep];
+  return [[rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}] writeToFile:path atomically:YES];
+}
+@end
+
 // ---------------------------------------------------------------- main
 
 static int PrintList(const std::string& dir) {
@@ -971,7 +1207,7 @@ static int Usage() {
                "agent-bar %s — floating status window for Claude Code sessions\n"
                "  agent-bar                    run the window (single instance)\n"
                "  agent-bar --list             print sessions and exit\n"
-               "  agent-bar --snapshot <png> [compact|expanded]\n"
+               "  agent-bar --snapshot <png> [compact|expanded|settings]\n"
                "                               render the window to a PNG and exit\n"
                "  agent-bar --autostart on|off start at login\n"
                "  agent-bar --version\n",
@@ -990,8 +1226,9 @@ int main(int argc, char** argv) {
       }
       if (a == "--list") return PrintList(dir);
       if (a == "--snapshot" && argc > 2) {
-        BOOL compact = !(argc > 3 && std::strcmp(argv[3], "expanded") == 0);
         BarController* c = [[BarController alloc] initWithDir:dir];
+        if (argc > 3 && std::strcmp(argv[3], "settings") == 0) return [c snapshotSettingsTo:@(argv[2])] ? 0 : 1;
+        BOOL compact = !(argc > 3 && std::strcmp(argv[3], "expanded") == 0);
         return [c snapshotTo:@(argv[2]) compact:compact] ? 0 : 1;
       }
       if (a == "--autostart" && argc > 2) {

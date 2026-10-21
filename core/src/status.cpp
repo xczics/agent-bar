@@ -156,6 +156,32 @@ Transition apply_event(const json* old, const HookEvent& ev, double now) {
   return t;
 }
 
+std::optional<RegisteredSession> parse_registry_entry(std::string_view raw) {
+  try {
+    json j = json::parse(raw.begin(), raw.end(), nullptr, /*allow_exceptions=*/false);
+    if (j.is_discarded() || !j.is_object()) return std::nullopt;
+    RegisteredSession r;
+    auto pid = j.find("pid");
+    if (pid == j.end() || !pid->is_number_integer()) return std::nullopt;
+    r.pid = pid->get<long>();
+    r.session_id = get_string(j, "sessionId");
+    r.cwd = get_string(j, "cwd");
+    r.status = get_string(j, "status");
+    if (r.pid <= 0 || !is_valid_session_id(r.session_id)) return std::nullopt;
+    return r;
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+json discovered_session_doc(const RegisteredSession& r, double now) {
+  HookEvent ev;
+  ev.session_id = r.session_id;
+  ev.cwd = r.cwd;
+  ev.event = r.status == "busy" ? "PostToolUse" : "SessionStart";  // busy with empty detail, or idle
+  return apply_event(nullptr, ev, now).doc;
+}
+
 std::optional<Session> session_from_json(const json& j, std::string_view id) {
   if (!j.is_object()) return std::nullopt;
   Session s;
@@ -204,15 +230,26 @@ const char* display_short_label(DisplayState d) {
   return "";
 }
 
-std::uint32_t display_color(DisplayState d) {
+std::uint32_t default_color(DisplayState d) {
   switch (d) {
-    case DisplayState::Waiting: return 0xe5484d;
-    case DisplayState::Replied: return 0x30a46c;
-    case DisplayState::Busy: return 0xf5a524;
-    case DisplayState::Stale:
-    case DisplayState::Idle: return 0x8b8d98;
+    case DisplayState::Waiting: return 0xe5484d;  // red
+    case DisplayState::Replied: return 0xffc53d;  // yellow
+    case DisplayState::Busy: return 0x30a46c;     // green
+    case DisplayState::Stale: return 0x8b8d98;    // gray
+    case DisplayState::Idle: return 0x46644f;     // green, switched off
   }
   return 0x8b8d98;
+}
+
+const char* display_key(DisplayState d) {
+  switch (d) {
+    case DisplayState::Waiting: return "waiting";
+    case DisplayState::Replied: return "replied";
+    case DisplayState::Busy: return "busy";
+    case DisplayState::Stale: return "stale";
+    case DisplayState::Idle: return "idle";
+  }
+  return "";
 }
 
 void sort_sessions(std::vector<Session>& sessions, double now, double stale_after) {

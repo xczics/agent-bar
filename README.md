@@ -17,7 +17,24 @@
 
 ## 安装
 
-**从 Release 安装**（推荐）：
+**让你的 agent 帮你装**（最省事）：把下面这段 prompt 原样发给 Claude Code（或其他能执行命令的 agent）即可。
+
+```text
+请帮我在这台 Mac 上安装 agent-bar（https://github.com/xczics/agent-bar）——一个显示所有 Claude Code 会话状态的桌面浮窗。按下面的步骤做，遇到任何错误先停下来告诉我：
+
+1. 确认系统是 macOS 11 或更高版本。
+2. 在一个新建的临时目录里，下载最新 release 的 universal 包和对应的 .sha256 文件：
+   gh release download -R xczics/agent-bar -p '*-macos-universal.tar.gz*'
+   （没有 gh 时，用 curl 读取 https://api.github.com/repos/xczics/agent-bar/releases/latest，找到这两个 asset 的下载地址再下载。）
+   用 shasum -a 256 -c 校验，然后解压。
+3. 先完整阅读解压出来的 install.sh，确认它只做这三件事：把程序复制到 ~/.claude/bin/；备份 ~/.claude/settings.json 并合并 agent-status-hook 的 hooks；启动浮窗。然后问我要不要开机自启，按我的回答运行 ./install.sh 或 ./install.sh --autostart。
+4. 运行 ~/.claude/bin/agent-bar --list，确认列表里能看到当前这个会话。
+5. 告诉我：浮窗在屏幕右上角；settings.json 的备份在哪里；卸载命令是 ~/.claude/bin/agent-bar-uninstall。
+
+不要改动 settings.json 中与 agent-status-hook 无关的任何内容。
+```
+
+**从 Release 手动安装**：
 
 ```sh
 V=0.0.1
@@ -46,16 +63,20 @@ scripts/install.sh
 
 ## 使用
 
-| 颜色 | 状态 | 含义 |
+| 颜色（默认） | 状态 | 含义 |
 | --- | --- | --- |
+| 🟢 绿（发光） | 运行中 | 正在思考或调用工具 |
+| 🟡 黄 | 已回复 | 这一轮已经答完，等你回话 |
 | 🔴 红 | 等你确认 | Claude 在等你批准权限或回答问题 |
-| 🟢 绿 | 已回复 | 这一轮已经答完 |
-| 🟠 橙 | 运行中 | 正在思考或调用工具 |
-| ⚪ 灰 | 空闲 / 无响应? | 刚开的会话；或已经超过 10 分钟没有任何动静 |
+| 暗绿（熄灭） | 空闲 | 刚开的会话，还没发消息 |
+| ⚪ 灰 | 无响应? | 运行中但已经超过 10 分钟没有任何动静 |
+
+颜色都可以在右键菜单 →“设置…”里自己改。
 
 - **紧凑模式**：单击灯 = 标为已读，并在 VS Code 里打开该项目；单击右侧 ⌄ 按钮（或空白处）= 展开列表；按住空白处可以拖动浮窗。
 - **展开列表**：单击一行 = 标为已读；双击 = 标为已读并打开 VS Code；点右上角的“收起”回到紧凑模式；拖动标题栏可以移动浮窗。
-- **右键菜单**：展开/收起、全部标为已读、清理空闲记录、紧凑模式（以及灯上简称、灯下状态两个开关）、开机自启、退出。
+- **右键菜单**：展开/收起、全部标为已读、清理空闲记录、紧凑模式（以及灯上简称、灯下状态两个开关）、开机自启、设置…、退出。
+- **设置窗口**：自定义每种状态的颜色（可恢复默认）、显示选项、无响应阈值、开机自启。
 
 更详细的说明（配置项、命令行参数、排错、卸载）见 [使用教程](docs/tutorial.md)。
 

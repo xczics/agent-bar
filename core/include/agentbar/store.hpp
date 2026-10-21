@@ -59,6 +59,16 @@ bool remove_session(const std::string& dir, const std::string& id);
 bool remove_session_if(const std::string& dir, const std::string& id,
                        const std::function<bool(const Session&)>& pred);
 
+// $AGENT_BAR_SESSIONS_DIR if set (tests), else ~/.claude/sessions.
+std::string claude_sessions_dir();
+bool pid_alive(long pid);
+
+// Adds a status file for every live session in Claude Code's registry that has
+// none yet, so sessions show up without waiting for their next hook event
+// (after the bar restarts or right after install). Never overwrites.
+int discover_sessions(const std::string& dir, const std::string& sessions_dir, double now,
+                      const std::function<bool(long)>& alive = pid_alive);
+
 // Removes sessions whose `updated` is older than max_age seconds.
 int cleanup_expired(const std::string& dir, double now, double max_age);
 // Removes sessions currently displayed as idle or stale.

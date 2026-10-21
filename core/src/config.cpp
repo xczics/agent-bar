@@ -1,6 +1,7 @@
 #include "agentbar/config.hpp"
 
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <sstream>
 
@@ -23,6 +24,23 @@ bool parse_double(std::string_view v, double* out) {
   return true;
 }
 
+// "#rrggbb" or "rrggbb".
+bool parse_hex_color(std::string_view v, std::uint32_t* out) {
+  if (!v.empty() && v[0] == '#') v.remove_prefix(1);
+  if (v.size() != 6) return false;
+  std::uint32_t rgb = 0;
+  for (char ch : v) {
+    int d;
+    if (ch >= '0' && ch <= '9') d = ch - '0';
+    else if (ch >= 'a' && ch <= 'f') d = ch - 'a' + 10;
+    else if (ch >= 'A' && ch <= 'F') d = ch - 'A' + 10;
+    else return false;
+    rgb = (rgb << 4) | static_cast<std::uint32_t>(d);
+  }
+  *out = rgb;
+  return true;
+}
+
 }  // namespace
 
 BarConfig parse_bar_ini(std::string_view text) {
@@ -36,8 +54,17 @@ BarConfig parse_bar_ini(std::string_view text) {
     auto eq = line.find('=');
     if (eq == std::string_view::npos) continue;
     std::string_view key = trim(line.substr(0, eq));
+    std::string_view value = trim(line.substr(eq + 1));
+    if (key.substr(0, 6) == "color_") {
+      std::uint32_t rgb = 0;
+      if (!parse_hex_color(value, &rgb)) continue;
+      for (DisplayState d : kAllDisplayStates) {
+        if (key.substr(6) == display_key(d)) c.set_color(d, rgb);
+      }
+      continue;
+    }
     double v = 0;
-    if (!parse_double(trim(line.substr(eq + 1)), &v)) continue;
+    if (!parse_double(value, &v)) continue;
     if (key == "x") {
       c.x = v;
       has_x = true;
@@ -72,6 +99,11 @@ std::string format_bar_ini(const BarConfig& c) {
   o << "compact=" << (c.compact ? 1 : 0) << "\n";
   o << "show_names=" << (c.show_names ? 1 : 0) << "\n";
   o << "show_status=" << (c.show_status ? 1 : 0) << "\n";
+  for (DisplayState d : kAllDisplayStates) {
+    char hex[8];
+    std::snprintf(hex, sizeof hex, "#%06x", static_cast<unsigned>(c.color(d)));
+    o << "color_" << display_key(d) << "=" << hex << "\n";
+  }
   return o.str();
 }
 

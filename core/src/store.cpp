@@ -11,6 +11,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <signal.h>
+
 #include <cerrno>
 #include <chrono>
 #include <cstdlib>
@@ -241,6 +243,42 @@ bool remove_session_if(const std::string& dir, const std::string& id,
   bool ok = unlink(path.c_str()) == 0;
   unlink(lpath.c_str());
   return ok;
+}
+
+std::string claude_sessions_dir() {
+  if (const char* d = std::getenv("AGENT_BAR_SESSIONS_DIR"); d && *d) return d;
+  return home_dir() + "/.claude/sessions";
+}
+
+bool pid_alive(long pid) {
+  return pid > 0 && (kill(static_cast<pid_t>(pid), 0) == 0 || errno == EPERM);
+}
+
+int discover_sessions(const std::string& dir, const std::string& sessions_dir, double now,
+                      const std::function<bool(long)>& alive) {
+  DIR* d = opendir(sessions_dir.c_str());
+  if (!d) return 0;
+  std::vector<std::string> files;
+  while (dirent* e = readdir(d)) {
+    std::string name = e->d_name;
+    if (ends_with(name, ".json")) files.push_back(sessions_dir + "/" + name);
+  }
+  closedir(d);
+
+  int added = 0;
+  for (const auto& f : files) {
+    auto text = read_file(f);
+    if (!text) continue;
+    auto r = parse_registry_entry(*text);
+    if (!r || !alive(r->pid)) continue;
+    const std::string path = session_path(dir, r->session_id);
+    if (access(path.c_str(), F_OK) == 0) continue;  // the hook already tracks it
+    ensure_dir(dir);
+    FileLock lock(lock_path(dir, r->session_id), kLockTimeoutMs);
+    if (!lock.locked() || access(path.c_str(), F_OK) == 0) continue;
+    if (write_file_atomic(path, dump_json(discovered_session_doc(*r, now)))) ++added;
+  }
+  return added;
 }
 
 int cleanup_expired(const std::string& dir, double now, double max_age) {

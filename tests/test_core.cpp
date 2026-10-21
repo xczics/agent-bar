@@ -260,7 +260,10 @@ TEST(display_states) {
   s.state = "garbage";
   CHECK(display_state(s, 1000, 600) == DisplayState::Idle);
   CHECK_EQ(std::string(display_label(DisplayState::Stale)), std::string("无响应?"));
-  CHECK_EQ(display_color(DisplayState::Waiting), 0xe5484du);
+  CHECK_EQ(default_color(DisplayState::Waiting), 0xe5484du);
+  CHECK_EQ(default_color(DisplayState::Busy), 0x30a46cu);      // running = green
+  CHECK_EQ(default_color(DisplayState::Replied), 0xffc53du);   // replied = yellow
+  CHECK(default_color(DisplayState::Idle) != default_color(DisplayState::Busy));
 }
 
 TEST(sorting) {
@@ -373,6 +376,15 @@ TEST(bar_ini_roundtrip) {
   BarConfig bare = parse_bar_ini("show_names=0\nshow_status=0\n");
   CHECK(!bare.show_names && !bare.show_status);
   CHECK(parse_bar_ini(format_bar_ini(BarConfig{})).show_names);
+}
+
+TEST(bar_ini_colors) {
+  BarConfig c = parse_bar_ini("color_busy=#112233\ncolor_idle=AABBCC\ncolor_waiting=#zzzzzz\ncolor_nope=#000000\n");
+  CHECK_EQ(c.color(DisplayState::Busy), 0x112233u);
+  CHECK_EQ(c.color(DisplayState::Idle), 0xaabbccu);
+  CHECK_EQ(c.color(DisplayState::Waiting), default_color(DisplayState::Waiting));  // invalid ignored
+  BarConfig back = parse_bar_ini(format_bar_ini(c));
+  for (DisplayState d : kAllDisplayStates) CHECK_EQ(back.color(d), c.color(d));
 }
 
 // ---------- settings.json merge ----------
@@ -502,6 +514,48 @@ TEST(store_cleanup) {
   auto left = store::scan(dir);
   CHECK_EQ(left.size(), std::size_t(2));
   std::system(("rm -rf '" + dir + "'").c_str());
+}
+
+TEST(registry_parsing) {
+  auto r = parse_registry_entry(
+      R"({"pid":61699,"sessionId":"99748ab4-3860","cwd":"/x/wargame","status":"idle","kind":"interactive"})");
+  CHECK(r.has_value());
+  CHECK_EQ(r->pid, 61699L);
+  CHECK_EQ(r->session_id, std::string("99748ab4-3860"));
+  CHECK(!parse_registry_entry(R"({"pid":"1","sessionId":"a"})"));
+  CHECK(!parse_registry_entry(R"({"pid":1,"sessionId":"../x"})"));
+  CHECK(!parse_registry_entry("garbage"));
+  RegisteredSession busy{1, "b", "/x/proj", "busy"};
+  json doc = discovered_session_doc(busy, 50);
+  CHECK_EQ(doc["state"].get<std::string>(), std::string("busy"));
+  CHECK_EQ(doc["project"].get<std::string>(), std::string("proj"));
+  CHECK_EQ(doc["unread"].get<bool>(), false);
+  RegisteredSession idle{1, "i", "/x/proj", "idle"};
+  CHECK_EQ(discovered_session_doc(idle, 50)["state"].get<std::string>(), std::string("idle"));
+}
+
+TEST(store_discover_sessions) {
+  std::string dir = make_temp_dir();
+  std::string reg = make_temp_dir();
+  store::write_file_atomic(reg + "/100.json", R"({"pid":100,"sessionId":"live1","cwd":"/a/one","status":"busy"})");
+  store::write_file_atomic(reg + "/200.json", R"({"pid":200,"sessionId":"dead1","cwd":"/a/two","status":"idle"})");
+  store::write_file_atomic(reg + "/300.json", R"({"pid":300,"sessionId":"known","cwd":"/a/three","status":"idle"})");
+  store::write_file_atomic(reg + "/300.abc.key", "secret");
+  store::handle_event(dir, ev("Stop"), 1);  // s1 unrelated
+  HookEvent known = ev("Stop");
+  known.session_id = "known";
+  store::handle_event(dir, known, 1);
+  auto alive = [](long pid) { return pid != 200; };
+  CHECK_EQ(store::discover_sessions(dir, reg, 1000, alive), 1);
+  auto doc = store::read_json(store::session_path(dir, "live1"));
+  CHECK(doc.has_value());
+  CHECK_EQ((*doc)["state"].get<std::string>(), std::string("busy"));
+  CHECK(!store::read_json(store::session_path(dir, "dead1")));
+  CHECK_EQ((*store::read_json(store::session_path(dir, "known")))["state"].get<std::string>(),
+           std::string("replied"));  // existing file untouched
+  CHECK_EQ(store::discover_sessions(dir, reg, 1001, alive), 0);  // idempotent
+  CHECK_EQ(store::discover_sessions(dir, "/nonexistent-dir", 1, alive), 0);
+  std::system(("rm -rf '" + dir + "' '" + reg + "'").c_str());
 }
 
 TEST(store_lock_timeout) {

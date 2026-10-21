@@ -5,6 +5,7 @@
 set -euo pipefail
 SECS="${1:-3600}"
 BIN="${2:-$(cd "$(dirname "$0")/.." && pwd)/build/bin}"
+export AGENT_BAR_SESSIONS_DIR=/nonexistent   # do not discover the real sessions
 export AGENT_STATUS_DIR="$(mktemp -d "${TMPDIR:-/tmp}/agentbar-idle.XXXXXX")"
 for i in 1 2 3; do
   printf '{"session_id":"idle%s","cwd":"/tmp/p%s","hook_event_name":"PreToolUse","tool_name":"Bash"}' "$i" "$i" | "$BIN/agent-status-hook"

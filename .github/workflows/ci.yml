@@ -9,7 +9,7 @@ jobs:
   macos:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install hyperfine
         run: brew install hyperfine
       - name: Configure
@@ -33,7 +33,7 @@ jobs:
     # core/ and the hook are POSIX; keep them building off macOS too.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
       - name: Build

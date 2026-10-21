@@ -59,6 +59,20 @@ struct Transition {
 // nullptr when the file does not exist (or is unreadable).
 Transition apply_event(const json* old, const HookEvent& ev, double now);
 
+// An entry of Claude Code's own session registry (~/.claude/sessions/<pid>.json).
+// Undocumented format, read best-effort: {"pid", "sessionId", "cwd", "status"}.
+struct RegisteredSession {
+  long pid = 0;
+  std::string session_id;
+  std::string cwd;
+  std::string status;  // "busy", "idle", ...
+};
+std::optional<RegisteredSession> parse_registry_entry(std::string_view raw);
+
+// Initial status file for a running session we have not seen any hook event
+// from (e.g. it predates the hook install). busy -> busy, anything else -> idle.
+json discovered_session_doc(const RegisteredSession& r, double now);
+
 // ---- reading side (agent-bar) ----
 
 enum class DisplayState { Waiting, Replied, Busy, Stale, Idle };
@@ -82,7 +96,13 @@ DisplayState display_state(const Session& s, double now, double stale_after);
 int display_rank(DisplayState d);  // waiting=0 ... idle=4
 const char* display_label(DisplayState d);
 const char* display_short_label(DisplayState d);  // compact mode: "确认", "运行", ...
-std::uint32_t display_color(DisplayState d);  // 0xRRGGBB
+// Default palette (0xRRGGBB); users can override it in bar.ini / settings.
+// busy = green, idle = dimmed green, replied = yellow, waiting = red, stale = gray.
+std::uint32_t default_color(DisplayState d);
+inline constexpr DisplayState kAllDisplayStates[] = {DisplayState::Waiting, DisplayState::Replied,
+                                                     DisplayState::Busy, DisplayState::Stale,
+                                                     DisplayState::Idle};
+const char* display_key(DisplayState d);  // "waiting", "replied", "busy", "stale", "idle"
 
 // Unread first, then waiting > replied > busy > stale > idle, then updated desc.
 void sort_sessions(std::vector<Session>& sessions, double now, double stale_after);

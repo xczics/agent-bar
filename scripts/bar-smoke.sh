@@ -6,6 +6,7 @@
 set -euo pipefail
 
 BIN="${1:-$(cd "$(dirname "$0")/.." && pwd)/build/bin}"
+export AGENT_BAR_SESSIONS_DIR=/nonexistent   # do not discover the real sessions
 export AGENT_STATUS_DIR="$(mktemp -d "${TMPDIR:-/tmp}/agentbar-smoke.XXXXXX")"
 export AGENT_STATUS_DEBUG=1
 LOG="$AGENT_STATUS_DIR/bar.log"
