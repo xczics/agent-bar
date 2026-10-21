@@ -14,6 +14,8 @@
 - 只读状态，不控制 agent，不联网。
 
 > 目前支持 macOS 11 及以上版本（Apple 芯片和 Intel 都支持）。Windows 版在规划中。
+>
+> 支持所有读取 `~/.claude/settings.json` 的本地 Claude Code：终端 CLI、VS Code 插件（已实测），以及 Cursor 等 VS Code 衍生编辑器和 JetBrains 插件（理论上支持，未实测）。详见[教程 · 支持哪些 agent](docs/tutorial.md#支持哪些-agent)。
 
 ## 安装
 
@@ -28,10 +30,19 @@
    （没有 gh 时，用 curl 读取 https://api.github.com/repos/xczics/agent-bar/releases/latest，找到这两个 asset 的下载地址再下载。）
    用 shasum -a 256 -c 校验，然后解压。
 3. 先完整阅读解压出来的 install.sh，确认它只做这三件事：把程序复制到 ~/.claude/bin/；备份 ~/.claude/settings.json 并合并 agent-status-hook 的 hooks；启动浮窗。然后问我要不要开机自启，按我的回答运行 ./install.sh 或 ./install.sh --autostart。
-4. 运行 ~/.claude/bin/agent-bar --list，确认列表里能看到当前这个会话。
+4. 运行 ~/.claude/bin/agent-bar attach，把当前这个会话挂到浮窗上，并把输出原样告诉我。
 5. 告诉我：浮窗在屏幕右上角；settings.json 的备份在哪里；卸载命令是 ~/.claude/bin/agent-bar-uninstall。
 
 不要改动 settings.json 中与 agent-status-hook 无关的任何内容。
+```
+
+**让 agent 把自己挂到浮窗上**：装好之后，新开的会话会自动出现在浮窗上，已经开着的会话通常也会被自动发现。如果某个 agent 没出现，或者你想确认它已经接上了，就把下面这段发给它：
+
+```text
+请把你自己（当前这个 Claude Code 会话）挂到 agent-bar 浮窗上：
+1. 检查 ~/.claude/bin/agent-bar 是否存在。不存在就停下来告诉我，需要先安装 agent-bar（https://github.com/xczics/agent-bar）。
+2. 在你自己的 shell 里运行 ~/.claude/bin/agent-bar attach（不要另开终端，它要靠进程链认出你是哪个会话），然后把输出原样告诉我。
+3. 如果输出里 hooks 一行显示 MISSING，告诉我需要重新运行安装脚本；不要自己修改 ~/.claude/settings.json。
 ```
 
 **从 Release 手动安装**：

@@ -25,6 +25,9 @@ std::string hook_command_for_path(const std::string& path);
 // Returns true when `settings` changed. `settings` must be an object.
 bool merge_hooks(json& settings, const std::string& command);
 
+// True when every event in kHookEvents has an entry running agent-status-hook.
+bool hooks_complete(const json& settings);
+
 // Removes all of our entries, pruning groups/events/"hooks" that become empty.
 bool remove_hooks(json& settings);
 

@@ -18,7 +18,10 @@
 #include <string>
 #include <vector>
 
+#include <sys/wait.h>
+
 #include "agentbar/config.hpp"
+#include "agentbar/settings.hpp"
 #include "agentbar/status.hpp"
 #include "agentbar/store.hpp"
 
@@ -1220,11 +1223,102 @@ static int PrintList(const std::string& dir) {
   return 0;
 }
 
+static int Usage();
+
+// True when some agent-bar holds the single-instance lock.
+static bool BarRunning(const std::string& dir) {
+  int fd = open((dir + "/bar.lock").c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+  if (fd < 0) return false;
+  const bool running = flock(fd, LOCK_EX | LOCK_NB) != 0;
+  close(fd);  // releases our probe lock if we got it
+  return running;
+}
+
+// Starts agent-bar fully detached (double fork + setsid), so it outlives the
+// agent's shell that ran `agent-bar attach`.
+static bool SpawnDetachedBar() {
+  const std::string exe = ExecutablePath();
+  pid_t pid = fork();
+  if (pid < 0) return false;
+  if (pid == 0) {
+    setsid();
+    if (fork() != 0) _exit(0);
+    int null = open("/dev/null", O_RDWR);
+    dup2(null, 0);
+    dup2(null, 1);
+    dup2(null, 2);
+    execl(exe.c_str(), exe.c_str(), (char*)nullptr);
+    _exit(127);
+  }
+  int status = 0;
+  waitpid(pid, &status, 0);
+  return true;
+}
+
+// `agent-bar attach`: registers the Claude Code session this command runs in
+// (found through the process tree), checks the hooks and makes sure the bar
+// is running. Meant to be run by an agent on the user's behalf.
+static int Attach(const std::string& dir, int argc, char** argv) {
+  RegisteredSession r;
+  for (int i = 2; i + 1 < argc; i += 2) {
+    if (std::strcmp(argv[i], "--session-id") == 0) r.session_id = argv[i + 1];
+    else if (std::strcmp(argv[i], "--cwd") == 0) r.cwd = argv[i + 1];
+    else return Usage();
+  }
+  if (r.session_id.empty()) {
+    auto found = store::find_session_for_process(store::claude_sessions_dir(), (long)getpid());
+    if (!found) {
+      std::fprintf(stderr,
+                   "error: not running inside a Claude Code session (no ancestor process in %s).\n"
+                   "Run this from the agent's shell, or pass --session-id <id> --cwd <dir>.\n",
+                   store::claude_sessions_dir().c_str());
+      return 1;
+    }
+    r = *found;
+  } else if (!is_valid_session_id(r.session_id)) {
+    std::fprintf(stderr, "error: invalid session id\n");
+    return 1;
+  }
+
+  const double now = store::now_seconds();
+  const bool added = store::register_session(dir, r, now);
+  std::string state = "?";
+  if (auto doc = store::read_json(store::session_path(dir, r.session_id))) {
+    if (auto s = session_from_json(*doc, r.session_id)) state = display_label(display_state(*s, now, 600));
+  }
+  std::printf("session   %s (%s)\n", r.session_id.c_str(), r.cwd.c_str());
+  std::printf("status    %s, shown as \"%s\"\n", added ? "registered now" : "already on the bar", state.c_str());
+
+  const char* home = std::getenv("HOME");
+  const std::string settings_path = std::string(home && *home ? home : NSHomeDirectory().UTF8String) +
+                                    "/.claude/settings.json";
+  bool hooks_ok = false;
+  if (auto text = store::read_file(settings_path)) {
+    json settings = json::parse(*text, nullptr, false);
+    hooks_ok = !settings.is_discarded() && hooks_complete(settings);
+  }
+  if (hooks_ok) {
+    std::printf("hooks     installed in %s\n", settings_path.c_str());
+  } else {
+    std::printf("hooks     MISSING in %s: the light will not update. Run install.sh from the release.\n",
+                settings_path.c_str());
+  }
+
+  if (BarRunning(dir)) {
+    std::printf("agent-bar running\n");
+  } else {
+    std::printf("agent-bar %s\n", SpawnDetachedBar() ? "started" : "could not be started");
+  }
+  return hooks_ok ? 0 : 2;
+}
+
 static int Usage() {
   std::fprintf(stderr,
                "agent-bar %s — floating status window for Claude Code sessions\n"
                "  agent-bar                    run the window (single instance)\n"
                "  agent-bar --list             print sessions and exit\n"
+               "  agent-bar attach [--session-id <id> --cwd <dir>]\n"
+               "                               put the Claude Code session this runs in on the bar\n"
                "  agent-bar --snapshot <png> [compact|expanded|settings]\n"
                "                               render the window to a PNG and exit\n"
                "  agent-bar --autostart on|off start at login\n"
@@ -1243,6 +1337,7 @@ int main(int argc, char** argv) {
         return 0;
       }
       if (a == "--list") return PrintList(dir);
+      if (a == "attach") return Attach(dir, argc, argv);
       if (a == "--snapshot" && argc > 2) {
         BarController* c = [[BarController alloc] initWithDir:dir];
         if (argc > 3 && std::strcmp(argv[3], "settings") == 0) return [c snapshotSettingsTo:@(argv[2])] ? 0 : 1;

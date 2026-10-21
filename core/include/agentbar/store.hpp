@@ -63,6 +63,20 @@ bool remove_session_if(const std::string& dir, const std::string& id,
 std::string claude_sessions_dir();
 bool pid_alive(long pid);
 
+// Parent of a process, 0 if unknown.
+long parent_pid(long pid);
+
+// The Claude Code session a process belongs to: walks up from start_pid
+// through its ancestors and returns the first one listed in the registry.
+// This is how a command run by an agent finds "its own" session.
+std::optional<RegisteredSession> find_session_for_process(
+    const std::string& sessions_dir, long start_pid,
+    const std::function<long(long)>& parent = parent_pid);
+
+// Writes the initial status file for a registered session if it has none.
+// Returns true when a file was added.
+bool register_session(const std::string& dir, const RegisteredSession& r, double now);
+
 // Adds a status file for every live session in Claude Code's registry that has
 // none yet, so sessions show up without waiting for their next hook event
 // (after the bar restarts or right after install). Never overwrites.

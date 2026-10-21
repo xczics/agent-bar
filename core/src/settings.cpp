@@ -106,6 +106,21 @@ bool merge_hooks(json& settings, const std::string& command) {
   return changed;
 }
 
+bool hooks_complete(const json& settings) {
+  if (!settings.is_object() || !settings.contains("hooks") || !settings["hooks"].is_object()) return false;
+  const json& hooks = settings["hooks"];
+  for (const char* event : kHookEvents) {
+    if (!hooks.contains(event) || !hooks[event].is_array()) return false;
+    bool found = false;
+    for (const auto& g : hooks[event]) {
+      if (!g.is_object() || !g.contains("hooks") || !g["hooks"].is_array()) continue;
+      for (const auto& h : g["hooks"]) found = found || is_our_entry(h);
+    }
+    if (!found) return false;
+  }
+  return true;
+}
+
 bool remove_hooks(json& settings) {
   if (!settings.is_object() || !settings.contains("hooks") || !settings["hooks"].is_object())
     return false;

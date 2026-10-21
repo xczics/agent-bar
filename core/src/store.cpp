@@ -12,8 +12,14 @@
 #include <unistd.h>
 
 #include <signal.h>
+#ifdef __APPLE__
+#include <sys/sysctl.h>
+#endif
+
+#include <map>
 
 #include <cerrno>
+#include <cstdio>
 #include <chrono>
 #include <cstdlib>
 #include <thread>
@@ -254,29 +260,72 @@ bool pid_alive(long pid) {
   return pid > 0 && (kill(static_cast<pid_t>(pid), 0) == 0 || errno == EPERM);
 }
 
-int discover_sessions(const std::string& dir, const std::string& sessions_dir, double now,
-                      const std::function<bool(long)>& alive) {
+namespace {
+
+std::vector<RegisteredSession> read_registry(const std::string& sessions_dir) {
+  std::vector<RegisteredSession> out;
   DIR* d = opendir(sessions_dir.c_str());
-  if (!d) return 0;
+  if (!d) return out;
   std::vector<std::string> files;
   while (dirent* e = readdir(d)) {
     std::string name = e->d_name;
     if (ends_with(name, ".json")) files.push_back(sessions_dir + "/" + name);
   }
   closedir(d);
-
-  int added = 0;
   for (const auto& f : files) {
-    auto text = read_file(f);
-    if (!text) continue;
-    auto r = parse_registry_entry(*text);
-    if (!r || !alive(r->pid)) continue;
-    const std::string path = session_path(dir, r->session_id);
-    if (access(path.c_str(), F_OK) == 0) continue;  // the hook already tracks it
-    ensure_dir(dir);
-    FileLock lock(lock_path(dir, r->session_id), kLockTimeoutMs);
-    if (!lock.locked() || access(path.c_str(), F_OK) == 0) continue;
-    if (write_file_atomic(path, dump_json(discovered_session_doc(*r, now)))) ++added;
+    if (auto text = read_file(f)) {
+      if (auto r = parse_registry_entry(*text)) out.push_back(std::move(*r));
+    }
+  }
+  return out;
+}
+
+}  // namespace
+
+long parent_pid(long pid) {
+#ifdef __APPLE__
+  int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, static_cast<int>(pid)};
+  kinfo_proc info{};
+  size_t size = sizeof info;
+  if (sysctl(mib, 4, &info, &size, nullptr, 0) != 0 || size == 0) return 0;
+  return info.kp_eproc.e_ppid;
+#else
+  auto stat = read_file("/proc/" + std::to_string(pid) + "/stat");
+  if (!stat) return 0;
+  auto close = stat->rfind(')');  // comm may contain spaces
+  if (close == std::string::npos) return 0;
+  long ppid = 0;
+  char state = 0;
+  return std::sscanf(stat->c_str() + close + 1, " %c %ld", &state, &ppid) == 2 ? ppid : 0;
+#endif
+}
+
+std::optional<RegisteredSession> find_session_for_process(const std::string& sessions_dir, long start_pid,
+                                                          const std::function<long(long)>& parent) {
+  std::map<long, RegisteredSession> by_pid;
+  for (auto& r : read_registry(sessions_dir)) by_pid[r.pid] = r;
+  long pid = start_pid;
+  for (int depth = 0; depth < 64 && pid > 1; ++depth) {
+    if (auto it = by_pid.find(pid); it != by_pid.end()) return it->second;
+    pid = parent(pid);
+  }
+  return std::nullopt;
+}
+
+bool register_session(const std::string& dir, const RegisteredSession& r, double now) {
+  const std::string path = session_path(dir, r.session_id);
+  if (access(path.c_str(), F_OK) == 0) return false;  // the hook already tracks it
+  ensure_dir(dir);
+  FileLock lock(lock_path(dir, r.session_id), kLockTimeoutMs);
+  if (!lock.locked() || access(path.c_str(), F_OK) == 0) return false;
+  return write_file_atomic(path, dump_json(discovered_session_doc(r, now)));
+}
+
+int discover_sessions(const std::string& dir, const std::string& sessions_dir, double now,
+                      const std::function<bool(long)>& alive) {
+  int added = 0;
+  for (const auto& r : read_registry(sessions_dir)) {
+    if (alive(r.pid) && register_session(dir, r, now)) ++added;
   }
   return added;
 }

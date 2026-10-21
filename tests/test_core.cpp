@@ -563,6 +563,33 @@ TEST(store_discover_sessions) {
   std::system(("rm -rf '" + dir + "' '" + reg + "'").c_str());
 }
 
+TEST(find_own_session_by_ancestry) {
+  std::string reg = make_temp_dir();
+  store::write_file_atomic(reg + "/50.json", R"({"pid":50,"sessionId":"mine","cwd":"/a/me","status":"busy"})");
+  store::write_file_atomic(reg + "/60.json", R"({"pid":60,"sessionId":"other","cwd":"/a/o","status":"idle"})");
+  // process tree: 99 (shell) -> 70 (bash) -> 50 (claude) -> 1
+  auto parent = [](long p) -> long { return p == 99 ? 70 : p == 70 ? 50 : p == 50 ? 1 : 0; };
+  auto r = store::find_session_for_process(reg, 99, parent);
+  CHECK(r.has_value());
+  CHECK_EQ(r->session_id, std::string("mine"));
+  CHECK(!store::find_session_for_process(reg, 12345, parent));
+  CHECK(store::parent_pid(static_cast<long>(getpid())) == static_cast<long>(getppid()));
+
+  std::string dir = make_temp_dir();
+  CHECK(store::register_session(dir, *r, 10));
+  CHECK(!store::register_session(dir, *r, 11));  // never overwrites
+  std::system(("rm -rf '" + dir + "' '" + reg + "'").c_str());
+}
+
+TEST(hooks_complete_check) {
+  json s = json::object();
+  CHECK(!hooks_complete(s));
+  merge_hooks(s, "/x/agent-status-hook");
+  CHECK(hooks_complete(s));
+  s["hooks"].erase("Stop");
+  CHECK(!hooks_complete(s));
+}
+
 TEST(store_lock_timeout) {
   std::string dir = make_temp_dir();
   std::string lp = store::lock_path(dir, "s1");

@@ -19,6 +19,10 @@
 - [ ] **紧凑模式自动收起**：展开后，鼠标离开浮窗 N 秒自动收回紧凑模式（可选，等用户确认要不要）。
 - [ ] **签名与公证**：目前只有 ad-hoc 签名。用浏览器下载后需要运行 install.sh 才能去掉隔离属性。
 
+- [ ] **点击跳转按运行形式区分**：现在点击总是执行 `code <cwd>`。会话登记里有 `entrypoint`（例如 `claude-vscode`、`cli`），可以据此对终端会话改为激活对应的终端或 tmux 窗口。
+- [ ] **支持其他 agent**：状态文件协议是通用的。给 Codex CLI、Gemini CLI 等提供适配（各自的 hook 或 notify 机制 → 调用 `agent-status-hook`，或写一个小的适配脚本），并在 `project` 旁边显示 agent 类型。
+- [ ] 实测 Cursor、JetBrains、Claude 桌面 App 里的会话。
+
 ### 之后
 
 - [ ] **Windows 版 agent-bar**（里程碑 4）：Win32 + GDI，用 `ReadDirectoryChangesW` 监听目录，`LockFileEx` 加锁，`MoveFileExW` 原子替换；需要在 `core/src/store.cpp` 里加 Win32 分支（目前遇到 `_WIN32` 会直接 `#error`）；install 脚本用 PowerShell，并且必须写入绝对路径。

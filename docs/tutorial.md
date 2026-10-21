@@ -5,6 +5,8 @@
 ## 目录
 
 - [安装](#安装)
+- [支持哪些 agent](#支持哪些-agent)
+- [把 agent 挂到浮窗上（attach）](#把-agent-挂到浮窗上attach)
 - [第一次使用](#第一次使用)
 - [界面说明](#界面说明)
 - [操作](#操作)
@@ -57,6 +59,43 @@ scripts/install.sh
 - `--autostart`：同时设为开机自启。
 - `--no-start`：装完不启动浮窗。
 - `--hook-only`：只装 hook，不装浮窗。
+
+## 支持哪些 agent
+
+agent-bar 通过 Claude Code 的 hooks 拿到状态，所以只要是**在这台 Mac 上本地运行、并读取用户级 `~/.claude/settings.json`** 的 Claude Code，都能显示：
+
+| 运行形式 | 支持情况 |
+| --- | --- |
+| VS Code 插件 | ✅ 已实测 |
+| 终端里的 `claude` CLI（任意终端、tmux 等） | ✅ 支持，hooks 机制与插件相同 |
+| Cursor、Windsurf 等 VS Code 衍生编辑器里的 Claude Code 插件 | ✅ 理论上支持，未实测 |
+| JetBrains 插件 | ✅ 理论上支持（它运行的就是 CLI），未实测 |
+| Claude 桌面 App 里的本地 Claude Code 会话 | ⚠️ 取决于它是否读取 `~/.claude/settings.json`，未实测 |
+| Claude Agent SDK 写的程序 | ⚠️ 只有加载了用户级设置（`settingSources` 包含 `user`）时才有 hooks |
+| 子 agent（Task 工具） | 不单独显示，只体现为主会话“运行中” |
+| 云端会话（claude.ai/code、GitHub Actions 等） | ❌ 不在本机运行，看不到 |
+| 其他 agent（Codex CLI、Gemini CLI、Aider 等） | ❌ 暂不支持（见 [Handoff.md](../Handoff.md) 的规划） |
+
+注意：点击灯会打开 VS Code（`code <cwd>`），即使这个会话其实跑在终端里。
+
+## 把 agent 挂到浮窗上（attach）
+
+一般不需要手动操作：新会话会通过 hooks 自动出现；已经开着的会话会被浮窗从 `~/.claude/sessions/` 里自动发现。
+
+想让某个 agent 确认自己已经接上，就让它在**自己的 shell 里**运行：
+
+```sh
+~/.claude/bin/agent-bar attach
+```
+
+它会：
+
+1. 沿着进程链往上找，认出自己属于哪个 Claude Code 会话；
+2. 如果这个会话还没有状态记录，就补一条（已有记录时不改动）；
+3. 检查 `~/.claude/settings.json` 里的 hooks 是否完整。缺失时输出 `MISSING`，并以退出码 2 结束，但不会擅自修改设置；
+4. 如果浮窗没在运行，就把它启动起来（独立进程，不随 agent 的 shell 退出）。
+
+README 里有一段现成的[挂载 prompt](../README.md#安装)，可以直接发给 agent。如果在会话外运行，可以手动指定：`agent-bar attach --session-id <id> --cwd <目录>`。
 
 ## 第一次使用
 
@@ -162,6 +201,8 @@ color_idle=#46644f
 ```text
 agent-bar                         启动浮窗（单实例：已在运行时只把它带到前台）
 agent-bar --list                  在终端打印当前会话列表
+agent-bar attach [--session-id <id> --cwd <dir>]
+                                  把当前所在的 Claude Code 会话挂到浮窗上，并检查 hooks、确保浮窗在运行
 agent-bar --snapshot out.png [compact|expanded|settings]
                                   把浮窗（或设置窗口）离屏渲染成 PNG（不需要屏幕录制权限）
 agent-bar --autostart on|off      开关开机自启
