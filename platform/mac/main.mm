@@ -176,10 +176,11 @@ static void OpenInVSCode(const std::string& cwd) {
 
 @class BarView;
 
-@interface BarController : NSObject
+@interface BarController : NSObject <NSMenuDelegate>
 - (instancetype)initWithDir:(std::string)dir;
 - (void)start;
 - (BOOL)snapshotTo:(NSString*)path compact:(BOOL)compact;
+- (BOOL)snapshotMenuBarTo:(NSString*)path;
 - (void)bringToFront;
 - (const std::vector<Session>&)sessions;
 - (const BarConfig&)config;
@@ -626,6 +627,52 @@ static void DrawLight(NSRect r, NSColor* color, BOOL glow, BOOL hollow) {
 
 @end
 
+// ---------------------------------------------------------------- menu bar
+
+// The menu-bar lights: up to kMenuBarLights dots, the last becoming "+N" when
+// there are more. Unread dots get a ring in the menu bar's text colour (drawn
+// lazily, so it follows the light/dark menu bar).
+static const int kMenuBarLights = 8;
+
+static NSImage* MenuBarImage(const std::vector<Session>& sessions, const BarConfig& cfg, double now) {
+  const LightGrid g = light_grid(sessions.size(), kMenuBarLights, 1);
+  const CGFloat dot = 9, gap = 4, h = 16;
+  const int cells = std::max(g.cols, 1);
+  const CGFloat w = cells * dot + (cells - 1) * gap + (g.overflow > 0 ? 16 : 0) + 2;
+  std::vector<std::pair<uint32_t, bool>> dots;  // colour, unread
+  for (int i = 0; i < g.lights; ++i) {
+    dots.emplace_back(cfg.color(display_state(sessions[i], now, cfg.stale_after_seconds())), sessions[i].unread);
+  }
+  const int overflow = g.overflow;
+  NSImage* image = [NSImage imageWithSize:NSMakeSize(w, h)
+                                  flipped:NO
+                           drawingHandler:^BOOL(NSRect) {
+                             if (dots.empty()) {
+                               DrawLight(NSMakeRect(1, (h - dot) / 2, dot, dot), NSColor.secondaryLabelColor, NO, YES);
+                               return YES;
+                             }
+                             for (size_t i = 0; i < dots.size(); ++i) {
+                               NSRect r = NSMakeRect(1 + i * (dot + gap), (h - dot) / 2, dot, dot);
+                               DrawLight(r, RGB(dots[i].first), NO, NO);
+                               if (dots[i].second) {
+                                 [NSColor.labelColor setStroke];
+                                 NSBezierPath* ring = [NSBezierPath bezierPathWithOvalInRect:NSInsetRect(r, -1.5, -1.5)];
+                                 ring.lineWidth = 1;
+                                 [ring stroke];
+                               }
+                             }
+                             if (overflow > 0) {
+                               NSString* more = [NSString stringWithFormat:@"+%d", overflow];
+                               NSRect r = NSMakeRect(1 + dots.size() * (dot + gap) - 2, 1, dot + 12, h - 2);
+                               DrawText(more, r, [NSFont systemFontOfSize:10 weight:NSFontWeightSemibold],
+                                        NSColor.labelColor, NSTextAlignmentLeft);
+                             }
+                             return YES;
+                           }];
+  [image setTemplate:NO];
+  return image;
+}
+
 // ---------------------------------------------------------------- controller
 
 static void FSEventsCallback(ConstFSEventStreamRef, void* info, size_t, void*,
@@ -641,6 +688,7 @@ static void FSEventsCallback(ConstFSEventStreamRef, void* info, size_t, void*,
   std::string _signature;  // last scanned content, to skip redundant redraws
   std::string _clockText;  // last drawn clock-dependent text
   BOOL _expanded;          // temporarily showing the full list while compact mode is on
+  NSStatusItem* _statusItem;  // menu-bar lights (when show_menubar)
   NSPanel* _panel;
   BarView* _view;
   FSEventStreamRef _stream;
@@ -689,7 +737,7 @@ static void FSEventsCallback(ConstFSEventStreamRef, void* info, size_t, void*,
   [self discover];
   [self rescan:YES];
   [self placeInitially];
-  [_panel orderFrontRegardless];
+  [self applyPlacement];
   [_view layoutChanged];
   {
     NSRect f = _panel.frame;
@@ -721,7 +769,152 @@ static void FSEventsCallback(ConstFSEventStreamRef, void* info, size_t, void*,
 }
 
 - (void)bringToFront {
-  [_panel orderFrontRegardless];
+  if (_config.show_floating) [_panel orderFrontRegardless];
+}
+
+// ---- placement: floating window and/or menu bar
+
+- (void)applyPlacement {
+  if (_config.show_floating) {
+    [_panel orderFrontRegardless];
+  } else {
+    [_panel orderOut:nil];
+  }
+  if (_config.show_menubar && !_statusItem) {
+    _statusItem = [NSStatusBar.systemStatusBar statusItemWithLength:NSVariableStatusItemLength];
+    NSMenu* menu = [[NSMenu alloc] init];
+    menu.delegate = self;  // rebuilt in menuNeedsUpdate: each time it opens
+    menu.autoenablesItems = NO;
+    _statusItem.menu = menu;
+    _statusItem.button.imagePosition = NSImageOnly;
+  } else if (!_config.show_menubar && _statusItem) {
+    [NSStatusBar.systemStatusBar removeStatusItem:_statusItem];
+    _statusItem = nil;
+  }
+  [self updateStatusItem];
+  char line[96];
+  std::snprintf(line, sizeof line, "placement floating=%d menubar=%d", (int)_config.show_floating,
+                (int)(_statusItem != nil));
+  DebugLog(_dir, line);
+}
+
+- (void)updateStatusItem {
+  if (!_statusItem) return;
+  _statusItem.button.image = MenuBarImage(_sessions, _config, store::now_seconds());
+  _statusItem.button.toolTip = NS(title_text(_sessions, store::now_seconds(), _config.stale_after_seconds()));
+}
+
+- (void)placeFloating {
+  [self updateConfig:^(BarConfig& c) {
+    c.show_floating = true;
+    c.show_menubar = false;
+  }];
+}
+
+- (void)placeMenuBar {
+  [self updateConfig:^(BarConfig& c) {
+    c.show_floating = false;
+    c.show_menubar = true;
+  }];
+}
+
+// "放在：桌面浮窗 / 菜单栏" radio items, shared by both menus.
+- (void)addPlacementItems:(NSMenu*)menu {
+  NSMenuItem* header = [menu addItemWithTitle:@"放在" action:nil keyEquivalent:@""];
+  header.enabled = NO;
+  NSMenuItem* floating = [menu addItemWithTitle:@"桌面浮窗" action:@selector(placeFloating) keyEquivalent:@""];
+  floating.target = self;
+  floating.indentationLevel = 1;
+  floating.state = _config.show_floating ? NSControlStateValueOn : NSControlStateValueOff;
+  NSMenuItem* bar = [menu addItemWithTitle:@"菜单栏" action:@selector(placeMenuBar) keyEquivalent:@""];
+  bar.target = self;
+  bar.indentationLevel = 1;
+  bar.state = _config.show_menubar ? NSControlStateValueOn : NSControlStateValueOff;
+}
+
+// The menu-bar menu: one row per session (click = mark read + open VS Code),
+// then the common actions.
+- (void)menuNeedsUpdate:(NSMenu*)menu {
+  [menu removeAllItems];
+  const double now = store::now_seconds();
+  const double stale = _config.stale_after_seconds();
+  NSMenuItem* title = [menu addItemWithTitle:NS(title_text(_sessions, now, stale)) action:nil keyEquivalent:@""];
+  title.enabled = NO;
+  if (_sessions.empty()) {
+    NSMenuItem* none = [menu addItemWithTitle:@"暂无会话" action:nil keyEquivalent:@""];
+    none.enabled = NO;
+  }
+  for (const Session& s : _sessions) {
+    const DisplayState d = display_state(s, now, stale);
+    NSColor* color = RGB(_config.color(d));
+    NSMutableAttributedString* text = [[NSMutableAttributedString alloc] init];
+    NSFont* nameFont = s.unread ? [NSFont boldSystemFontOfSize:13] : [NSFont menuFontOfSize:13];
+    [text appendAttributedString:[[NSAttributedString alloc] initWithString:NS(AgentPrefix(s) + s.project)
+                                                                 attributes:@{NSFontAttributeName : nameFont}]];
+    [text appendAttributedString:[[NSAttributedString alloc]
+                                     initWithString:[@"   " stringByAppendingString:NS(status_text(s, now, stale))]
+                                         attributes:@{
+                                           NSFontAttributeName : [NSFont menuFontOfSize:11],
+                                           NSForegroundColorAttributeName : TextColor(color)
+                                         }]];
+    if (!s.detail.empty()) {
+      [text appendAttributedString:[[NSAttributedString alloc]
+                                       initWithString:[@"\n" stringByAppendingString:NS(display_detail(s.detail))]
+                                           attributes:@{
+                                             NSFontAttributeName : [NSFont menuFontOfSize:11],
+                                             NSForegroundColorAttributeName : NSColor.secondaryLabelColor
+                                           }]];
+    }
+    NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:NS(s.project) action:@selector(openSessionItem:)
+                                           keyEquivalent:@""];
+    item.attributedTitle = text;
+    item.target = self;
+    item.representedObject = NS(s.id);
+    item.image = [NSImage imageWithSize:NSMakeSize(12, 12)
+                                flipped:NO
+                         drawingHandler:^BOOL(NSRect r) {
+                           DrawLight(NSInsetRect(r, 1, 1), color, NO, NO);
+                           return YES;
+                         }];
+    [menu addItem:item];
+  }
+  [menu addItem:[NSMenuItem separatorItem]];
+  [menu addItemWithTitle:@"全部标为已读" action:@selector(markAllRead) keyEquivalent:@""].target = self;
+  [menu addItemWithTitle:@"清理空闲/无响应记录" action:@selector(cleanIdle) keyEquivalent:@""].target = self;
+  [menu addItem:[NSMenuItem separatorItem]];
+  [self addPlacementItems:menu];
+  [menu addItem:[NSMenuItem separatorItem]];
+  [menu addItemWithTitle:@"设置…" action:@selector(openSettings) keyEquivalent:@""].target = self;
+  [menu addItemWithTitle:@"退出" action:@selector(quit) keyEquivalent:@""].target = self;
+}
+
+- (void)openSessionItem:(NSMenuItem*)item {
+  const std::string id = [(NSString*)item.representedObject UTF8String];
+  for (const Session& s : _sessions) {
+    if (s.id != id) continue;
+    if (store::mark_read(_dir, s.id)) [self rescan:NO];
+    OpenInVSCode(s.cwd);
+    return;
+  }
+}
+
+- (BOOL)snapshotMenuBarTo:(NSString*)path {
+  [self rescan:YES];
+  NSImage* image = MenuBarImage(_sessions, _config, store::now_seconds());
+  NSBitmapImageRep* rep = [[NSBitmapImageRep alloc]
+      initWithBitmapDataPlanes:nullptr pixelsWide:(NSInteger)(image.size.width * 2)
+                    pixelsHigh:(NSInteger)(image.size.height * 2) bitsPerSample:8 samplesPerPixel:4 hasAlpha:YES
+                      isPlanar:NO colorSpaceName:NSDeviceRGBColorSpace bytesPerRow:0 bitsPerPixel:0];
+  rep.size = image.size;
+  [NSGraphicsContext saveGraphicsState];
+  NSGraphicsContext.currentContext = [NSGraphicsContext graphicsContextWithBitmapImageRep:rep];
+  [[NSAppearance appearanceNamed:NSAppearanceNameDarkAqua] performAsCurrentDrawingAppearance:^{
+    [[NSColor colorWithWhite:0.15 alpha:1] setFill];  // dark menu bar backdrop
+    NSRectFill(NSMakeRect(0, 0, image.size.width, image.size.height));
+    [image drawInRect:NSMakeRect(0, 0, image.size.width, image.size.height)];
+  }];
+  [NSGraphicsContext restoreGraphicsState];
+  return [[rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}] writeToFile:path atomically:YES];
 }
 
 // Renders the view off-screen at 2x into a PNG (docs and visual checks; needs
@@ -801,6 +994,7 @@ static void FSEventsCallback(ConstFSEventStreamRef, void* info, size_t, void*,
 }
 
 - (void)relayout {
+  [self updateStatusItem];
   [self resizeToFit];
   _view.needsDisplay = YES;
   [_view displayIfNeeded];
@@ -827,10 +1021,9 @@ static void FSEventsCallback(ConstFSEventStreamRef, void* info, size_t, void*,
            (s.unread ? "1" : "0") + '\x1f' + std::to_string(s.since) + '\x1f' + std::to_string(s.updated) +
            '\x1e';
   }
-  if (!force && sig == _signature) {
-    DebugLog(_dir, "rescan unchanged");
-    return;
-  }
+  // No debug log here: bar.log lives in the watched directory, so logging an
+  // unchanged rescan would trigger the next one.
+  if (!force && sig == _signature) return;
   _signature = std::move(sig);
   _sessions = std::move(sessions);
   if (_panel) [self relayout];
@@ -883,6 +1076,7 @@ static void FSEventsCallback(ConstFSEventStreamRef, void* info, size_t, void*,
   _clockText = std::move(text);
   _view.needsDisplay = YES;
   [_view layoutChanged];
+  [self updateStatusItem];
   DebugLog(_dir, "tick redraw");
 }
 
@@ -930,6 +1124,8 @@ static void FSEventsCallback(ConstFSEventStreamRef, void* info, size_t, void*,
   [menu addItemWithTitle:@"全部标为已读" action:@selector(markAllRead) keyEquivalent:@""].target = self;
   [menu addItemWithTitle:@"清理空闲/无响应记录" action:@selector(cleanIdle) keyEquivalent:@""].target = self;
   [menu addItem:[NSMenuItem separatorItem]];
+  [self addPlacementItems:menu];
+  [menu addItem:[NSMenuItem separatorItem]];
   NSMenuItem* compact = [menu addItemWithTitle:@"紧凑模式" action:@selector(toggleCompact) keyEquivalent:@""];
   compact.target = self;
   compact.state = _config.compact ? NSControlStateValueOn : NSControlStateValueOff;
@@ -972,6 +1168,7 @@ static void FSEventsCallback(ConstFSEventStreamRef, void* info, size_t, void*,
   fn(_config);
   [self saveConfig];
   [self applySpacesBehavior];
+  [self applyPlacement];
   _signature.clear();  // thresholds can change the order
   [self rescan:YES];
   [self relayout];
@@ -1327,7 +1524,7 @@ static int Usage() {
                "  agent-bar --list             print sessions and exit\n"
                "  agent-bar attach [--session-id <id> --cwd <dir>]\n"
                "                               put the Claude Code session this runs in on the bar\n"
-               "  agent-bar --snapshot <png> [compact|expanded|settings]\n"
+               "  agent-bar --snapshot <png> [compact|expanded|settings|menubar]\n"
                "                               render the window to a PNG and exit\n"
                "  agent-bar --autostart on|off start at login\n"
                "  agent-bar --version\n",
@@ -1349,6 +1546,7 @@ int main(int argc, char** argv) {
       if (a == "--snapshot" && argc > 2) {
         BarController* c = [[BarController alloc] initWithDir:dir];
         if (argc > 3 && std::strcmp(argv[3], "settings") == 0) return [c snapshotSettingsTo:@(argv[2])] ? 0 : 1;
+        if (argc > 3 && std::strcmp(argv[3], "menubar") == 0) return [c snapshotMenuBarTo:@(argv[2])] ? 0 : 1;
         BOOL compact = !(argc > 3 && std::strcmp(argv[3], "expanded") == 0);
         return [c snapshotTo:@(argv[2]) compact:compact] ? 0 : 1;
       }

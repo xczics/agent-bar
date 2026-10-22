@@ -14,7 +14,7 @@
 
 ### v0.0.3
 
-已完成、待发布的内容记在 [changelog/unreleased.md](changelog/unreleased.md)（目前有：后台任务通知显示成人话；修复子 agent 冒用主 agent 的灯）。发版时间等用户决定。
+已完成、待发布的内容记在 [changelog/unreleased.md](changelog/unreleased.md)（目前有：灯可以放进菜单栏；后台任务通知显示成人话；修复子 agent 冒用主 agent 的灯，以及随后的“无响应”误判）。发版时间等用户决定。
 
 ### 近期
 

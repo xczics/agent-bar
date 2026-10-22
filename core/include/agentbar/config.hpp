@@ -18,6 +18,10 @@ struct BarConfig {
   bool compact = true;      // lights-only view; click to expand
   bool show_names = true;   // compact: short project name above each light
   bool show_status = true;  // compact: short status below each light
+  // Where the lights live; the right-click menu picks one ("放在…"). Both may be
+  // set by hand in bar.ini; never neither.
+  bool show_floating = true;   // the floating window
+  bool show_menubar = false;   // lights in the macOS menu bar (status item)
   bool all_spaces = false;  // on every desktop (fixed in Mission Control) vs. one movable desktop
   // Colours per display state (0xRRGGBB), indexed by DisplayState.
   std::uint32_t colors[5] = {

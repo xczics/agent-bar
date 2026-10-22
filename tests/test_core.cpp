@@ -471,6 +471,11 @@ TEST(bar_ini_roundtrip) {
   CHECK(!parse_bar_ini(format_bar_ini(off)).compact);
   BarConfig bare = parse_bar_ini("show_names=0\nshow_status=0\n");
   CHECK(!bare.show_names && !bare.show_status);
+  CHECK(BarConfig{}.show_floating && !BarConfig{}.show_menubar);  // default: floating window
+  BarConfig menubar_only = parse_bar_ini("show_floating=0\nshow_menubar=1\n");
+  CHECK(!menubar_only.show_floating && menubar_only.show_menubar);
+  CHECK(!parse_bar_ini(format_bar_ini(menubar_only)).show_floating);
+  CHECK(parse_bar_ini("show_floating=0\nshow_menubar=0\n").show_floating);  // never both hidden
   CHECK(!BarConfig{}.all_spaces);  // default: one desktop, draggable in Mission Control
   CHECK(parse_bar_ini("all_spaces=1\n").all_spaces);
   BarConfig every;
