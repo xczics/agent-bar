@@ -40,6 +40,8 @@ std::optional<HookEvent> parse_hook_input(std::string_view raw) {
     ev.tool_name = get_string(j, "tool_name");
     ev.prompt = get_string(j, "prompt");
     ev.message = get_string(j, "message");
+    // Claude Code adds agent_id / agent_type to hooks fired inside a subagent.
+    ev.subagent = !get_string(j, "agent_id").empty();
     return ev;
   } catch (...) {
     return std::nullopt;
@@ -126,6 +128,9 @@ std::string project_name(std::string_view cwd) {
 Transition apply_event(const json* old, const HookEvent& ev, double now) {
   Transition t;
   const std::string& e = ev.event;
+  // Only the main agent's state is shown. A subagent's permission request
+  // still blocks the whole session, so its Notification is kept.
+  if (ev.subagent && e != "Notification") return t;
   if (e == "SessionEnd") {
     t.action = Action::Delete;
     return t;
@@ -176,11 +181,12 @@ Transition apply_event(const json* old, const HookEvent& ev, double now) {
   doc["v"] = kProtocolVersion;
   doc["session_id"] = ev.session_id;
   if (!ev.agent.empty()) doc["agent"] = ev.agent;
-  if (!ev.cwd.empty()) {
+  // First cwd wins: subagents share the session_id but may run in a worktree.
+  if (get_string(doc, "cwd").empty() && !ev.cwd.empty()) {
     doc["project"] = project_name(ev.cwd);
     doc["cwd"] = ev.cwd;
   } else {
-    if (!doc.contains("project")) doc["project"] = "";
+    if (!doc.contains("project")) doc["project"] = project_name(get_string(doc, "cwd"));
     if (!doc.contains("cwd")) doc["cwd"] = "";
   }
   doc["state"] = state;

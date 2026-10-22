@@ -203,6 +203,47 @@ TEST(task_notification_prompts) {
   CHECK_EQ(t.doc["detail"].get<std::string>(), std::string("后台任务完成：Run tests"));
 }
 
+TEST(subagent_events) {
+  auto main_ev = parse_hook_input(
+      R"({"session_id":"s1","hook_event_name":"PreToolUse","cwd":"/x/wargame","tool_name":"Agent"})");
+  CHECK(main_ev && !main_ev->subagent);
+  auto sub = parse_hook_input(
+      R"({"session_id":"s1","hook_event_name":"PreToolUse","cwd":"/x/wargame/.claude/worktrees/agent-ae31",)"
+      R"("tool_name":"Bash","agent_id":"ae31","agent_type":"general-purpose"})");
+  CHECK(sub && sub->subagent);
+
+  auto t = apply_event(nullptr, *main_ev, 1);
+  CHECK(apply_event(&t.doc, *sub, 2).action == Action::Ignore);  // tool calls of subagents: ignored
+
+  HookEvent sub_stop = *sub;
+  sub_stop.event = "Stop";
+  CHECK(apply_event(&t.doc, sub_stop, 2).action == Action::Ignore);
+  HookEvent sub_end = *sub;
+  sub_end.event = "SessionEnd";
+  CHECK(apply_event(&t.doc, sub_end, 2).action == Action::Ignore);  // must not delete the main light
+
+  HookEvent sub_perm = *sub;  // a subagent's permission request blocks the session
+  sub_perm.event = "Notification";
+  sub_perm.message = "Claude needs your permission to use Bash";
+  auto w = apply_event(&t.doc, sub_perm, 3);
+  CHECK_EQ(w.doc["state"].get<std::string>(), std::string("waiting"));
+  CHECK_EQ(w.doc["project"].get<std::string>(), std::string("wargame"));
+  CHECK_EQ(w.doc["cwd"].get<std::string>(), std::string("/x/wargame"));
+}
+
+TEST(cwd_is_sticky) {
+  json old = doc_with("busy", false, "Bash");  // cwd /x/my-app
+  HookEvent e = ev("PreToolUse", "tool_name", "Read");
+  e.cwd = "/x/my-app/.claude/worktrees/agent-1";
+  auto t = apply_event(&old, e, 5);
+  CHECK_EQ(t.doc["cwd"].get<std::string>(), std::string("/x/my-app"));
+  CHECK_EQ(t.doc["project"].get<std::string>(), std::string("my-app"));
+  json no_cwd = doc_with("busy", false, "Bash");
+  no_cwd["cwd"] = "";
+  auto t2 = apply_event(&no_cwd, e, 5);  // empty cwd gets filled
+  CHECK_EQ(t2.doc["cwd"].get<std::string>(), std::string("/x/my-app/.claude/worktrees/agent-1"));
+}
+
 TEST(map_pre_tool_use) {
   json old = doc_with("busy", false, "prompt text");
   auto t = apply_event(&old, ev("PreToolUse", "tool_name", "Bash"), 1000);

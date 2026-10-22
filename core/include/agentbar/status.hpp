@@ -32,6 +32,10 @@ struct HookEvent {
   std::string tool_name;
   std::string prompt;
   std::string message;
+  // Fired inside a subagent (Task/Agent tool) of this session. Subagents share
+  // the parent's session_id but run elsewhere (e.g. a worktree); only the main
+  // agent's state is shown, so apply_event ignores these except Notification.
+  bool subagent = false;
 };
 
 // Parses Claude Code's hook stdin JSON (the "claude" adapter). Returns nullopt
@@ -67,6 +71,9 @@ struct Transition {
 
 // The state machine from docs/design.md. `old` is the current file content or
 // nullptr when the file does not exist (or is unreadable).
+// The session's cwd/project is the first one recorded; later events (e.g. a
+// subagent working in a worktree) never rename it. Subagent events are ignored
+// except Notification, which blocks the whole session.
 Transition apply_event(const json* old, const HookEvent& ev, double now);
 
 // An entry of Claude Code's own session registry (~/.claude/sessions/<pid>.json).

@@ -14,7 +14,7 @@
 
 ### v0.0.3
 
-已完成、待发布的内容记在 [changelog/unreleased.md](changelog/unreleased.md)（目前有：后台任务通知显示成人话）。发版时间等用户决定。
+已完成、待发布的内容记在 [changelog/unreleased.md](changelog/unreleased.md)（目前有：后台任务通知显示成人话；修复子 agent 冒用主 agent 的灯）。发版时间等用户决定。
 
 ### 近期
 
@@ -41,5 +41,6 @@
 - 本机没有 Python 原型，“互通”是按协议格式验证的：在 `acceptance.sh` 里用 Python 模拟原型的写法。
 - 浮窗除了 `unread`，还会写**新的**状态文件：自动发现会话时，从 Claude Code 的会话登记 `~/.claude/sessions/<pid>.json`（未公开的格式，按尽力而为的方式读取）补建记录，但从不覆盖已有文件。原设计只允许浮窗写 `unread`。
 - 默认配色按用户偏好调整：运行中为绿色、空闲为暗绿色、已回复为黄色，并新增设置窗口用于自定义颜色。
+- 会话的 cwd 以第一次记录的为准（原设计是每个事件都更新 cwd），子 agent 的事件除权限请求外都忽略，原因见 changelog/unreleased.md。Claude Code 文档只确认了子 agent 的工具事件带 `agent_id`；子 agent 是否也会触发 Stop / Notification，文档没写，由“cwd 只认第一次”兜底。
 - 用户实测：关掉 VS Code 窗口或直接结束 Claude 进程时，`SessionEnd` 都会触发，灯会立即熄灭。所以不需要额外的进程存活检测。
 - 观察到 Claude Code 现在会热加载 settings.json 里的 hooks，设计文档中“安装后需要重启会话”这一条可能已经过时。
