@@ -72,7 +72,7 @@ agent-bar 通过 Claude Code 的 hooks 拿到状态，所以只要是**在这台
 | JetBrains 插件 | ✅ 理论上支持（它运行的就是 CLI），未实测 |
 | Claude 桌面 App 里的本地 Claude Code 会话 | ⚠️ 取决于它是否读取 `~/.claude/settings.json`，未实测 |
 | Claude Agent SDK 写的程序 | ⚠️ 只有加载了用户级设置（`settingSources` 包含 `user`）时才有 hooks |
-| 子 agent（Task / Agent 工具派出去干活的，包括在 worktree 里跑的） | 不单独显示，浮窗只显示主 agent 的状态。主 agent 派出子 agent 后保持“运行中”；子 agent 的工具调用不会改变灯的状态和项目名，只有子 agent 的权限请求会让灯变红，因为它会卡住整个会话 |
+| 子 agent（Task / Agent 工具派出去干活的，包括在 worktree 里跑的） | 不单独显示，浮窗只显示主 agent 的状态。主 agent 派出子 agent 后保持“运行中”；子 agent 的活动只会让主灯保持“活着”（不会被判成“无响应?”），不会改变灯的状态和项目名；只有子 agent 的权限请求会让灯变红，因为它会卡住整个会话 |
 | 云端会话（claude.ai/code、GitHub Actions 等） | ❌ 不在本机运行，看不到 |
 | 其他 agent（Codex CLI、Gemini CLI、Aider 等） | ❌ 暂无现成的适配。框架已经有了：写一个 adapter 就能接入，见[开发指南](development.md#为你喜欢的-agent-添加支持) |
 

@@ -213,14 +213,24 @@ TEST(subagent_events) {
   CHECK(sub && sub->subagent);
 
   auto t = apply_event(nullptr, *main_ev, 1);
-  CHECK(apply_event(&t.doc, *sub, 2).action == Action::Ignore);  // tool calls of subagents: ignored
+  // A subagent's events are a heartbeat: only `updated` moves.
+  auto hb = apply_event(&t.doc, *sub, 900);
+  CHECK(hb.action == Action::Write);
+  CHECK_EQ(hb.doc["updated"].get<double>(), 900.0);
+  CHECK_EQ(hb.doc["state"].get<std::string>(), std::string("busy"));
+  CHECK_EQ(hb.doc["detail"].get<std::string>(), std::string("Agent"));
+  CHECK_EQ(hb.doc["since"].get<double>(), 1.0);
+  CHECK_EQ(hb.doc["project"].get<std::string>(), std::string("wargame"));
+  auto s = session_from_json(hb.doc, "s1");
+  CHECK(display_state(*s, 1000, 600) == DisplayState::Busy);  // long subagent run: not stale
 
   HookEvent sub_stop = *sub;
   sub_stop.event = "Stop";
-  CHECK(apply_event(&t.doc, sub_stop, 2).action == Action::Ignore);
+  CHECK_EQ(apply_event(&t.doc, sub_stop, 2).doc["state"].get<std::string>(), std::string("busy"));
   HookEvent sub_end = *sub;
   sub_end.event = "SessionEnd";
-  CHECK(apply_event(&t.doc, sub_end, 2).action == Action::Ignore);  // must not delete the main light
+  CHECK(apply_event(&t.doc, sub_end, 2).action == Action::Write);  // must not delete the main light
+  CHECK(apply_event(nullptr, *sub, 2).action == Action::Ignore);    // never creates a light by itself
 
   HookEvent sub_perm = *sub;  // a subagent's permission request blocks the session
   sub_perm.event = "Notification";

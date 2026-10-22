@@ -76,7 +76,7 @@ build/bin/agent-bar --snapshot /tmp/a.png [compact|expanded|settings]   # 离屏
 - 写文件必须先对 `<session_id>.lock` 加 `flock`，再写临时文件并 rename 覆盖。用 `store::handle_event` 就自动满足这些要求。
 - 不认识的字段要原样保留。
 - `cwd` / `project` 以第一次记录的为准，之后的事件不会改写。Claude Code 的子 agent 和主会话共用同一个 session_id，但可能在别的目录（例如 worktree）里工作，不能让它们把项目名改掉。
-- **只显示主 agent**：`HookEvent.subagent` 为真的事件（Claude Code 发给子 agent 的 hook 输入里带 `agent_id`）会被 `apply_event` 忽略，只有 `Notification` 例外。写其他 agent 的 adapter 时，如果对方也有子 agent 或协作者的概念，同样要设置这个字段。
+- **只显示主 agent**：`HookEvent.subagent` 为真的事件（Claude Code 发给子 agent 的 hook 输入里带 `agent_id`）只当作心跳：`apply_event` 只刷新 `updated`（避免主 agent 等子 agent 时被判成 stale），不改其他字段；子 agent 自己不会新建状态文件；只有 `Notification` 按正常规则处理。写其他 agent 的 adapter 时，如果对方也有子 agent 或协作者的概念，同样要设置这个字段。
 
 **内部事件**（`HookEvent.event`）沿用 Claude Code 的 7 个事件名。任何 agent 都要映射到这几个事件上：
 

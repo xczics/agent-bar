@@ -128,9 +128,17 @@ std::string project_name(std::string_view cwd) {
 Transition apply_event(const json* old, const HookEvent& ev, double now) {
   Transition t;
   const std::string& e = ev.event;
-  // Only the main agent's state is shown. A subagent's permission request
-  // still blocks the whole session, so its Notification is kept.
-  if (ev.subagent && e != "Notification") return t;
+  // Only the main agent's state is shown. A subagent's events are a heartbeat:
+  // they refresh `updated` so a main agent waiting on a long subagent is not
+  // flagged stale, but change nothing else (state, detail, cwd). A subagent's
+  // permission request still blocks the whole session, so Notification is kept.
+  if (ev.subagent && e != "Notification") {
+    if (!old || !old->is_object()) return t;
+    t.action = Action::Write;
+    t.doc = *old;
+    t.doc["updated"] = now;
+    return t;
+  }
   if (e == "SessionEnd") {
     t.action = Action::Delete;
     return t;

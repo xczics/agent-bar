@@ -72,8 +72,9 @@ struct Transition {
 // The state machine from docs/design.md. `old` is the current file content or
 // nullptr when the file does not exist (or is unreadable).
 // The session's cwd/project is the first one recorded; later events (e.g. a
-// subagent working in a worktree) never rename it. Subagent events are ignored
-// except Notification, which blocks the whole session.
+// subagent working in a worktree) never rename it. Subagent events only refresh
+// `updated` (a heartbeat against stale), except Notification, which blocks the
+// whole session and is applied normally.
 Transition apply_event(const json* old, const HookEvent& ev, double now);
 
 // An entry of Claude Code's own session registry (~/.claude/sessions/<pid>.json).
