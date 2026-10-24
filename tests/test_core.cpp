@@ -10,6 +10,7 @@
 
 #include "agentbar/adapter.hpp"
 #include "agentbar/config.hpp"
+#include "agentbar/placement.hpp"
 #include "agentbar/settings.hpp"
 #include "agentbar/status.hpp"
 #include "agentbar/store.hpp"
@@ -491,6 +492,36 @@ TEST(bar_ini_colors) {
   CHECK_EQ(c.color(DisplayState::Waiting), default_color(DisplayState::Waiting));  // invalid ignored
   BarConfig back = parse_bar_ini(format_bar_ini(c));
   for (DisplayState d : kAllDisplayStates) CHECK_EQ(back.color(d), c.color(d));
+}
+
+// ---------- window placement ----------
+
+TEST(placement_with_and_without_external_display) {
+  const ScreenRect laptop{0, 0, 1470, 956};
+  const ScreenRect laptop_visible{0, 0, 1470, 924};
+  const ScreenRect external{-2560, 0, 2560, 1440};  // left of the laptop
+  BarConfig cfg;
+  cfg.has_position = true;
+  cfg.x = -395;  // saved while on the external display
+  cfg.top = 1400;
+
+  ScreenRect on_ext = place_window(cfg, 54, 34, {laptop, external}, laptop_visible);
+  CHECK_EQ(on_ext.x, -395.0);
+  CHECK_EQ(on_ext.max_y(), 1400.0);  // top edge kept
+
+  ScreenRect unplugged = place_window(cfg, 54, 34, {laptop}, laptop_visible);  // display gone: top-right of laptop
+  CHECK_EQ(unplugged.x, 1470.0 - 54 - kScreenMargin);
+  CHECK_EQ(unplugged.max_y(), 924.0 - kScreenMargin);
+  CHECK(frame_on_screen(unplugged, {laptop}));
+  CHECK(!frame_on_screen(on_ext, {laptop}));
+  CHECK(frame_on_screen(on_ext, {laptop, external}));
+
+  BarConfig none;  // never dragged
+  ScreenRect def = place_window(none, 300, 100, {laptop, external}, laptop_visible);
+  CHECK_EQ(def.x, 1470.0 - 300 - kScreenMargin);
+
+  // Barely peeking onto a screen (5 pt) does not count as visible.
+  CHECK(!frame_on_screen(ScreenRect{1465, 100, 54, 34}, {laptop}));
 }
 
 // ---------- settings.json merge ----------

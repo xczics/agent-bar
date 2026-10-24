@@ -22,6 +22,7 @@
 
 #include "agentbar/adapter.hpp"
 #include "agentbar/config.hpp"
+#include "agentbar/placement.hpp"
 #include "agentbar/settings.hpp"
 #include "agentbar/status.hpp"
 #include "agentbar/store.hpp"
@@ -766,10 +767,16 @@ static void FSEventsCallback(ConstFSEventStreamRef, void* info, size_t, void*,
                                                       selector:@selector(bringToFront)
                                                           name:kActivateNotification
                                                         object:nil];
+  [[NSNotificationCenter defaultCenter] addObserver:self
+                                           selector:@selector(screensChanged:)
+                                               name:NSApplicationDidChangeScreenParametersNotification
+                                             object:nil];
 }
 
 - (void)bringToFront {
-  if (_config.show_floating) [_panel orderFrontRegardless];
+  if (!_config.show_floating) return;
+  [self ensureOnScreen];
+  [_panel orderFrontRegardless];
 }
 
 // ---- placement: floating window and/or menu bar
@@ -948,22 +955,34 @@ static void FSEventsCallback(ConstFSEventStreamRef, void* info, size_t, void*,
 
 // ---- layout & persistence
 
+static ScreenRect ToRect(NSRect r) { return {r.origin.x, r.origin.y, r.size.width, r.size.height}; }
+
+static std::vector<ScreenRect> ScreenFrames() {
+  std::vector<ScreenRect> out;
+  for (NSScreen* screen in NSScreen.screens) out.push_back(ToRect(screen.frame));
+  return out;
+}
+
+// Puts the window at its saved position if that is on an attached screen,
+// else at the top-right of the main screen (see core/placement.hpp).
 - (void)placeInitially {
   NSSize size = [self contentSize];
-  NSRect frame = NSMakeRect(0, 0, size.width, size.height);
-  BOOL placed = NO;
-  if (_config.has_position) {
-    frame.origin = NSMakePoint(_config.x, _config.top - size.height);
-    NSPoint topLeft = NSMakePoint(_config.x + 10, _config.top - 10);
-    for (NSScreen* screen in NSScreen.screens) {
-      if (NSPointInRect(topLeft, screen.frame)) placed = YES;
-    }
-  }
-  if (!placed) {
-    NSRect vis = NSScreen.mainScreen.visibleFrame;
-    frame.origin = NSMakePoint(NSMaxX(vis) - size.width - 20, NSMaxY(vis) - size.height - 20);
-  }
-  [_panel setFrame:frame display:YES];
+  NSScreen* main = NSScreen.screens.firstObject ? NSScreen.screens.firstObject : NSScreen.mainScreen;
+  ScreenRect r = place_window(_config, size.width, size.height, ScreenFrames(), ToRect(main.visibleFrame));
+  [_panel setFrame:NSMakeRect(r.x, r.y, r.w, r.h) display:YES];
+}
+
+// Displays were plugged in or out (or resolution changed). Re-place the window:
+// it leaves a display that went away, and returns to its saved spot when that
+// display comes back. The saved position itself is only written on drag.
+- (void)screensChanged:(NSNotification*)n {
+  [self placeInitially];
+  [_panel invalidateShadow];
+  DebugLog(_dir, "screens changed, window re-placed");
+}
+
+- (void)ensureOnScreen {
+  if (!frame_on_screen(ToRect(_panel.frame), ScreenFrames())) [self placeInitially];
 }
 
 // Resizes to fit the content. The top edge stays put; horizontally the window

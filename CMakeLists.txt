@@ -32,6 +32,7 @@ endif()
 add_library(agentbar_core STATIC
   core/src/status.cpp
   core/src/adapter.cpp
+  core/src/placement.cpp
   core/src/config.cpp
   core/src/settings.cpp
   core/src/store.cpp)
